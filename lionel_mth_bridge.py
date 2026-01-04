@@ -5,7 +5,7 @@ Uses FTDI serial adapter for reliable TMCC data capture
 
 Author: Allen Nemetz
 Credits:
-- Mark Divechhio for his immense work translating MTH commands to and from the MTH WTIU
+- Mark DiVecchio for his immense work translating MTH commands to and from the MTH WTIU
   http://www.silogic.com/trains/RTC_Running.html
 - Lionel LLC for publishing TMCC and Legacy protocol specifications
 - O Gauge Railroading Forum (https://www.ogrforum.com/) for the model railroad community

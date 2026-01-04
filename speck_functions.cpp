@@ -2,7 +2,7 @@
  * speck_functions.cpp
  * 
  * Speck encryption implementation for MTH WTIU communication
- * Based on the implementation from RTCRemote by Mark Divechhio
+ * Based on implementation from RTCRemote by Mark DiVecchio
  * http://www.silogic.com/trains/RTC_Running.html
  * 
  * License: GNU General Public License v3.0
