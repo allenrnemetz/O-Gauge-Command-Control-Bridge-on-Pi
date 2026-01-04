@@ -59,13 +59,35 @@ sudo apt update
 sudo apt install python3-serial -y
 ```
 
-### 2. Test Hardware
+### 2. Configure WiFi Credentials
+**IMPORTANT:** You must configure WiFi credentials in the Arduino sketch before uploading:
+
+#### Method 1: Edit Arduino Sketch (Recommended)
+1. Open `mcu_mth_handler.ino` in Arduino IDE
+2. Find lines 47-48:
+   ```cpp
+   const char* ssid = "YOUR_WIFI_SSID";        // <-- Your WiFi network name
+   const char* password = "YOUR_WIFI_PASSWORD";  // <-- Your WiFi password
+   ```
+3. **Replace** `YOUR_WIFI_SSID` with your actual WiFi network name
+4. **Replace** `YOUR_WIFI_PASSWORD` with your actual WiFi password
+5. **Save** and upload to Arduino UNO Q
+
+#### Method 2: Use WiFiManager (Advanced)
+1. Uncomment lines 50-52 in `mcu_mth_handler.ino`:
+   ```cpp
+   // #include <WiFiManager.h>
+   // WiFiManager wifiManager;
+   ```
+2. Follow WiFiManager setup instructions for web-based configuration
+
+### 3. Test Hardware
 ```bash
 # Test FTDI connection
 python3 test_ftdi.py
 ```
 
-### 3. Run Bridge
+### 4. Run Bridge
 ```bash
 # Start the bridge
 python3 main.py
@@ -73,6 +95,71 @@ python3 main.py
 # Or run directly
 python3 lionel_mth_bridge.py
 ```
+
+## WiFi Configuration
+
+### 🔧 Required Setup
+The Arduino UNO Q (MCU) needs WiFi credentials to communicate with your MTH WTIU. This must be configured **before** uploading the Arduino sketch.
+
+### 📱 Step-by-Step Instructions
+
+#### 1. Open Arduino Sketch
+```bash
+# Open in Arduino IDE or App Lab
+mcu_mth_handler.ino
+```
+
+#### 2. Locate WiFi Section
+Find lines 46-52 in the sketch:
+```cpp
+// WiFi configuration - UPDATE THESE VALUES
+const char* ssid = "YOUR_WIFI_SSID";        // <-- Your WiFi network name
+const char* password = "YOUR_WIFI_PASSWORD";  // <-- Your WiFi password
+
+// Alternative: Use WiFiManager for configuration (uncomment to enable)
+// #include <WiFiManager.h>
+// WiFiManager wifiManager;
+```
+
+#### 3. Enter Your WiFi Credentials
+**Example:**
+```cpp
+// If your WiFi network is "MyHomeWiFi" and password is "password123"
+const char* ssid = "MyHomeWiFi";
+const char* password = "password123";
+```
+
+#### 4. Upload to Arduino UNO Q
+1. Connect Arduino UNO Q to your computer
+2. Select "Arduino UNO Q" as board
+3. Upload the modified sketch
+
+### 🔍 Troubleshooting WiFi
+
+#### Common Issues:
+- **Wrong credentials** - Double-check SSID and password
+- **Hidden networks** - Ensure your network is visible
+- **5GHz networks** - Arduino UNO Q only supports 2.4GHz
+- **Special characters** - Avoid spaces/special chars in passwords
+
+#### Verification:
+After uploading, open Serial Monitor (115200 baud). You should see:
+```
+=== MTH WTIU Handler Starting ===
+Initializing WiFi...
+WiFi connected
+IP address: 192.168.x.x
+mDNS responder started
+=== MTH WTIU Handler Ready ===
+```
+
+### 🌐 Network Requirements
+- **2.4GHz WiFi network** (required)
+- **Same network as MTH WTIU** (both devices must be on same subnet)
+- **mDNS/Bonjour enabled** (for automatic WTIU discovery)
+- **No captive portal** (hotel/airport WiFi won't work)
+- **Stable connection** - WiFi dropouts will interrupt train control
+- **Router supports mDNS** - Most modern routers do, but some may need enabling
 
 ## Usage
 
@@ -199,14 +286,24 @@ The bridge includes intelligent auto-reconnect capabilities:
 
 ## Troubleshooting
 
+### 🔧 Quick Setup Checklist
+1. **WiFi configured** in `mcu_mth_handler.ino` (lines 47-48)
+2. **SER2 connected** to Lionel Base 3
+3. **FTDI cable** connected to Arduino UNO Q
+4. **MTH WTIU** on same WiFi network
+5. **Python dependencies** installed: `pip install pyserial`
+
 ### MPU Issues
 - Check USB connection to Lionel Base 3
 - Check Python dependencies: `pip3 list | grep serial`
+- Verify FTDI cable: `python test_ftdi.py`
 
 ### MCU Issues
-- Verify WiFi credentials and network connection
-- Check MTH WTIU IP address and port (8882)
-- Ensure both devices on same WiFi network
+- **WiFi not connecting**: Double-check SSID/password in sketch
+- **Can't find WTIU**: Ensure both devices on same 2.4GHz network
+- **mDNS failing**: Check network allows mDNS/bonjour traffic
+- **WTIU port changes**: mDNS automatically handles port rotation
+- **Serial Monitor**: Should show "WiFi connected", "mDNS responder started", and WTIU discovery
 
 ### ProtoWhistle Issues
 - Verify MTH engine supports protowhistle
@@ -215,8 +312,28 @@ The bridge includes intelligent auto-reconnect capabilities:
 
 ### Command Not Working
 - Check TMCC command parsing in logs
-- Verify engine number mapping
+- Verify engine number mapping (1-99)
 - Check WTIU connection status
+- Ensure MTH engine is powered on and addressed
+
+### 📱 WiFi Configuration Problems
+**Symptoms:**
+- "WiFi connection failed" in Serial Monitor
+- No IP address shown
+- Can't find MTH WTIU
+
+**Solutions:**
+1. **Verify credentials** - Check SSID/password spelling
+2. **Network compatibility** - Use 2.4GHz only
+3. **Network security** - Avoid WPA3/Enterprise networks
+4. **Signal strength** - Move closer to router
+5. **Router settings** - Enable mDNS/bonjour services
+
+### 🔍 Debug Mode
+Enable debug logging by changing line 31 in `lionel_mth_bridge.py`:
+```python
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+```
 
 ## License
 GNU General Public License v3.0

@@ -26,6 +26,7 @@ import time
 import threading
 import logging
 import sys
+from threading import Lock
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -42,6 +43,20 @@ class LionelMTHBridge:
         self.auto_reconnect = True
         self.connection_check_interval = 5  # seconds
         self.max_reconnect_attempts = 10
+        
+        # Command type mapping for MCU communication
+        self.mcu_command_types = {
+            'direction': 1,
+            'speed': 2, 
+            'function': 3,
+            'smoke': 4,
+            'pfa': 5,
+            'engine': 6
+        }
+        
+        # Thread safety locks
+        self.lionel_lock = Lock()
+        self.mcu_lock = Lock()
         
     def wait_for_lionel_connection(self):
         """Wait for SER2 to be available and connect"""
@@ -165,10 +180,6 @@ class LionelMTHBridge:
                 return {'type': 'pfa', 'value': 'cab_chatter'}
             elif data_field == 0x17:  # TowerCom
                 return {'type': 'pfa', 'value': 'towercom'}
-            elif data_field == 0x1E:  # Engine Start
-                return {'type': 'engine', 'value': 'start'}
-            elif data_field == 0x1F:  # Engine Stop (already used for reverse, need different mapping)
-                return {'type': 'engine', 'value': 'stop'}
                 
         elif cmd_field == 0x03:  # Speed
             return {'type': 'speed', 'value': data_field}
@@ -189,11 +200,33 @@ class LionelMTHBridge:
             return False
         
         try:
-            # Format command for MCU
-            cmd_bytes = bytes([0xAA, command['type'][0], command['value'], 0xFF])
-            self.mcu_serial.write(cmd_bytes)
-            logger.debug(f"Sent to MCU: {cmd_bytes.hex()}")
-            return True
+            with self.mcu_lock:
+                # Get command type code
+                cmd_type_code = self.mcu_command_types.get(command['type'], 0)
+                
+                # Handle different value types
+                if command['type'] == 'speed':
+                    cmd_value = command['value']  # Speed is 0-31
+                elif command['type'] == 'engine':
+                    cmd_value = 1 if command['value'] == 'start' else 0
+                elif command['type'] == 'direction':
+                    cmd_value = 1 if command['value'] == 'forward' else 0
+                elif command['type'] in ['function', 'smoke', 'pfa']:
+                    # Convert string values to codes
+                    value_map = {
+                        'horn': 1, 'bell': 2,
+                        'increase': 1, 'decrease': 2, 'on': 3, 'off': 4,
+                        'cab_chatter': 1, 'towercom': 2
+                    }
+                    cmd_value = value_map.get(command['value'], 0)
+                else:
+                    cmd_value = 0
+                
+                # Format command packet: [0xAA, type_code, value, 0xFF]
+                cmd_bytes = bytes([0xAA, cmd_type_code, cmd_value, 0xFF])
+                self.mcu_serial.write(cmd_bytes)
+                logger.debug(f"Sent to MCU: {cmd_bytes.hex()}")
+                return True
         except Exception as e:
             logger.error(f"MCU send error: {e}")
             return False
@@ -214,15 +247,9 @@ class LionelMTHBridge:
                 elif command['type'] == 'function':
                     path = f"/control/function/{command['value']}"
                 elif command['type'] == 'smoke':
-                    if command['value'] in ['increase', 'decrease', 'on', 'off']:
-                        path = f"/control/smoke/{command['value']}"
-                    else:
-                        path = f"/control/smoke/{command['value']}"
+                    path = f"/control/smoke/{command['value']}"
                 elif command['type'] == 'pfa':
-                    if command['value'] in ['cab_chatter', 'towercom']:
-                        path = f"/control/pfa/{command['value']}"
-                    else:
-                        path = f"/control/pfa/{command['value']}"
+                    path = f"/control/pfa/{command['value']}"
                 elif command['type'] == 'engine':
                     if command['value'] == 'start':
                         path = "/control/engine/start"
@@ -253,25 +280,27 @@ class LionelMTHBridge:
         
         while self.running:
             try:
-                if self.lionel_serial.in_waiting > 0:
-                    data = self.lionel_serial.read(self.lionel_serial.in_waiting)
-                    
-                    # Look for TMCC packets
-                    for i in range(len(data) - 2):
-                        if data[i] == 0xFE:
-                            packet = data[i:i+3]
-                            logger.info(f"🎯 TMCC Packet: {packet.hex()}")
+                with self.lionel_lock:
+                    if self.lionel_serial and self.lionel_serial.is_open:
+                        if self.lionel_serial.in_waiting > 0:
+                            data = self.lionel_serial.read(self.lionel_serial.in_waiting)
                             
-                            # Parse and forward
-                            command = self.parse_tmcc_packet(packet)
-                            if command:
-                                logger.info(f"📤 Command: {command}")
-                                
-                                # Send to MCU
-                                self.send_to_mcu(command)
-                                
-                                # Send to MTH
-                                self.send_to_mth(command)
+                            # Look for TMCC packets
+                            for i in range(len(data) - 2):
+                                if data[i] == 0xFE:
+                                    packet = data[i:i+3]
+                                    logger.info(f"🎯 TMCC Packet: {packet.hex()}")
+                                    
+                                    # Parse and forward
+                                    command = self.parse_tmcc_packet(packet)
+                                    if command:
+                                        logger.info(f"📤 Command: {command}")
+                                        
+                                        # Send to MCU
+                                        self.send_to_mcu(command)
+                                        
+                                        # Send to MTH
+                                        self.send_to_mth(command)
                 
                 time.sleep(0.01)
                 
@@ -318,19 +347,26 @@ class LionelMTHBridge:
         logger.info("🛑 Stopping bridge...")
         self.running = False
         
-        if self.lionel_serial:
-            self.lionel_serial.close()
+        # Close serial connections safely
+        if self.lionel_serial and hasattr(self.lionel_serial, 'is_open') and self.lionel_serial.is_open:
+            try:
+                self.lionel_serial.close()
+            except Exception as e:
+                logger.warning(f"Error closing Lionel serial: {e}")
         
-        if self.mcu_serial:
-            self.mcu_serial.close()
+        if self.mcu_serial and hasattr(self.mcu_serial, 'is_open') and self.mcu_serial.is_open:
+            try:
+                self.mcu_serial.close()
+            except Exception as e:
+                logger.warning(f"Error closing MCU serial: {e}")
         
         # Restart Arduino Router
         try:
             import subprocess
             subprocess.run(['sudo', 'systemctl', 'start', 'arduino-router'], 
                          capture_output=True)
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Could not restart Arduino Router: {e}")
         
         logger.info("✅ Bridge stopped")
     

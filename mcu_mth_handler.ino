@@ -18,11 +18,18 @@
  * Copyright (c) 2026 Allen Nemetz. All rights reserved.
  * 
  * License: GNU General Public License v3.0
+ * 
+ * This sketch runs on the Arduino UNO Q MCU (sub-processor) and handles:
+ * - WiFi communication with MTH WTIU devices
+ * - mDNS discovery for automatic WTIU detection
+ * - Speck encryption for secure MTH protocol communication
+ * - Command reception from MPU via serial port
+ * - Real-time train control and status monitoring
  */
 
 #include <WiFiS3.h>
 #include <WiFiUdp.h>
-#include <ESP8266mDNS.h>
+#include <ArduinoUNOQmDNS.h>
 #include "speck_functions.h"
 
 // Command constants (must match MPU)
@@ -43,22 +50,32 @@ struct CommandPacket {
   bool bool_value;
 };
 
-// WiFi configuration
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+// WiFi configuration - UPDATE THESE VALUES
+const char* ssid = "YOUR_WIFI_SSID";        // <-- Your WiFi network name
+const char* password = "YOUR_WIFI_PASSWORD";  // <-- Your WiFi password
+
+// MTH WTIU configuration - UPDATE THESE VALUES
+const char* wtiu_ip = "192.168.0.100";      // <-- Your MTH WTIU IP address
+const int wtiu_port = 8882;                   // MTH WTIU default port
+
+// mDNS service configuration for MTH WTIU
+const char* wtiu_service = "wtiu";
+const char* wtiu_protocol = "tcp";
+
+// Alternative: Use WiFiManager for configuration (uncomment to enable)
+// #include <WiFiManager.h>
+// WiFiManager wifiManager;
 
 // Global variables
 WiFiClient wtiu_client;
 char wtiu_host[16] = "0.0.0.0";       // Will be populated by mDNS
-int wtiu_port = 8882;                   // Default port, will be updated from mDNS
-
-// Status LED
-#define STATUS_LED LED_BUILTIN
-
-// Communication state
+int wtiu_port_dynamic = 8882;           // Will be updated from mDNS
 bool wtiu_connected = false;
 unsigned long last_connection_attempt = 0;
 const unsigned long CONNECTION_RETRY_INTERVAL = 5000; // 5 seconds
+
+// Status LED
+#define STATUS_LED LED_BUILTIN
 
 // ProtoWhistle state
 bool protowhistle_enabled = false;
@@ -133,7 +150,7 @@ void initializeWiFi() {
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
     
-    // Initialize mDNS
+    // Initialize mDNS for WTIU discovery
     if (MDNS.begin("lionel-mth-bridge")) {
       Serial.println("mDNS responder started");
     } else {
@@ -155,11 +172,11 @@ bool discoverWTIU() {
     return false;
   }
   
+  Serial.print("Found ");
   Serial.print(n);
-  Serial.println(" WTIU service(s) found");
+  Serial.println(" WTIU service(s):");
   
-  // Use first available WTIU
-  for (int i = 0; i < n; ++i) {
+  for (int i = 0; i < n; i++) {
     Serial.print("  ");
     Serial.print(i + 1);
     Serial.print(": ");
@@ -172,13 +189,13 @@ bool discoverWTIU() {
     
     // Try to connect to this WTIU
     strcpy(wtiu_host, MDNS.IP(i).toString().c_str());
-    wtiu_port = MDNS.port(i);
+    wtiu_port_dynamic = MDNS.port(i);
     
     if (connectToWTIU()) {
       Serial.print("Connected to WTIU: ");
       Serial.print(wtiu_host);
       Serial.print(":");
-      Serial.println(wtiu_port);
+      Serial.println(wtiu_port_dynamic);
       return true;
     }
   }
@@ -195,9 +212,9 @@ bool connectToWTIU() {
   Serial.print("Connecting to MTH WTIU at ");
   Serial.print(wtiu_host);
   Serial.print(":");
-  Serial.println(wtiu_port);
+  Serial.println(wtiu_port_dynamic);
   
-  if (wtiu_client.connect(wtiu_host, wtiu_port)) {
+  if (wtiu_client.connect(wtiu_host, wtiu_port_dynamic)) {
     wtiu_connected = true;
     Serial.println("Connected to MTH WTIU");
     digitalWrite(STATUS_LED, HIGH); // Turn on LED when connected
@@ -214,6 +231,9 @@ bool connectToWTIU() {
 }
 
 void maintainWTIUConnection() {
+  // Update mDNS regularly
+  MDNS.update();
+  
   // Try to reconnect if connection is lost
   if (!wtiu_connected || !wtiu_client.connected()) {
     wtiu_connected = false;
@@ -230,9 +250,6 @@ void maintainWTIUConnection() {
       }
     }
   }
-  
-  // Update mDNS regularly
-  MDNS.update();
 }
 
 void receiveCommandFromMPU() {
@@ -425,6 +442,13 @@ void sendMTHCommand(const char* cmd) {
     // Pad to multiple of 4 bytes (2 words)
     size_t padded_len = ((cmd_len + 3) / 4) * 4;
     uint8_t* padded_cmd = (uint8_t*)malloc(padded_len);
+    
+    // Check for malloc failure
+    if (!padded_cmd) {
+      Serial.println("ERROR: Memory allocation failed for encryption");
+      return;
+    }
+    
     memset(padded_cmd, 0, padded_len);
     memcpy(padded_cmd, cmd, cmd_len);
     
