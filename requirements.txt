@@ -1,7 +1,0 @@
-pyserial>=3.5
-# Built-in modules (documented for clarity):
-# socket - For MTH WTIU communication
-# threading - For concurrent operations
-# logging - For debug and status messages
-# time - For timing operations
-# sys - For system operations

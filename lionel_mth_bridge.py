@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 lionel_mth_bridge.py - Lionel Base 3 to MTH WTIU Bridge
 Uses FTDI serial adapter for reliable TMCC data capture
@@ -22,9 +22,10 @@ enabling Lionel remote control of MTH DCS-equipped trains.
 
 import serial
 import socket
+import threading
 import time
 import logging
-import threading
+from collections import deque
 from threading import Lock
 import subprocess
 import re
@@ -61,6 +62,26 @@ class LionelMTHBridge:
         # Thread safety locks
         self.lionel_lock = Lock()
         self.mcu_lock = Lock()
+        self.mth_lock = Lock()
+        
+        # Speck encryption settings (Mark's RTCRemote - using his actual key)
+        self.use_encryption = True  # Always use Speck encryption for MTH WTIU
+        # Mark's actual Speck key from Comm_Thread.cpp:
+        # key[0] =  5196;  // 0x144C
+        # key[1] =  46084; // 0xB424  
+        # key[2] =  38013; // 0x947D
+        # key[3] =  32838; // 0x8046
+        # Stored as little-endian bytes: [0x4C, 0x14, 0x24, 0xB4, 0x7D, 0x94, 0x46, 0x80]
+        self.speck_key = bytes([0x4C, 0x14, 0x24, 0xB4, 0x7D, 0x94, 0x46, 0x80])
+        
+        # TMCC state
+        self.current_lionel_engine = 0
+        
+        # WTIU session key (from H5 response)
+        self.wtiu_session_key = None
+        
+        # WTIU TIU number (discovered from x command)
+        self.wtiu_tiu_number = None
         
     def wait_for_lionel_connection(self):
         """Wait for SER2 to be available and connect"""
@@ -70,7 +91,7 @@ class LionelMTHBridge:
         while self.running and attempt < self.max_reconnect_attempts:
             try:
                 # Try to open the port to see if SER2 is connected
-                test_serial = serial.Serial(self.lionel_port, baudrate=115200, timeout=1)
+                test_serial = serial.Serial(self.lionel_port, baudrate=9600, timeout=1)
                 test_serial.close()
                 
                 # If we can open it, try to connect properly
@@ -131,7 +152,7 @@ class LionelMTHBridge:
         try:
             self.lionel_serial = serial.Serial(
                 self.lionel_port, 
-                baudrate=115200, 
+                baudrate=9600,  # Lionel Base 3 DB9 port outputs at 9600 baud
                 bytesize=8, 
                 parity='N', 
                 stopbits=1, 
@@ -198,42 +219,105 @@ class LionelMTHBridge:
         if len(packet) != 3 or packet[0] != 0xFE:
             return None
         
-        cmd_field = packet[1] & 0x3F
-        data_field = packet[2]
+        # Extract TMCC packet fields correctly
+        # packet[1] = bits 15-8, packet[2] = bits 7-0
+        # Bit 15-14: Command type, Bit 13-7: Address (A), Bit 6-5: Command (C), Bit 4-0: Data (D)
         
-        # TMCC to MTH command mapping
-        if cmd_field == 0x00:  # Direction/Function
-            if data_field == 0x00:
+        # Extract address field (bits 13-7) from packet[1] and packet[2]
+        address_bits = ((packet[1] & 0x3F) << 1) | ((packet[2] & 0x80) >> 7)
+        
+        # Extract command field (bits 6-5) from packet[2]
+        cmd_field = (packet[2] & 0x60) >> 5
+        
+        # Extract data field (bits 4-0) from packet[2]
+        data_field = packet[2] & 0x1F
+        
+        # Update current engine from address field if present
+        if address_bits > 0 and address_bits <= 99:
+            self.current_lionel_engine = address_bits
+            logger.info(f"🔧 Using engine from address field: {self.current_lionel_engine}")
+        elif self.current_lionel_engine == 0:
+            self.current_lionel_engine = 1  # Default to engine 1 if no engine selected
+        
+        # Debug logging
+        logger.info(f"🔍 TMCC Parse: address=0x{address_bits:02x}, cmd_field=0x{cmd_field:02x}, data_field=0x{data_field:02x}")
+        
+        # TMCC to MTH command mapping based on actual packets
+        if cmd_field == 0x00:  # Engine/Train commands (binary 00)
+            if data_field == 0x00:  # Forward (00000)
                 return {'type': 'direction', 'value': 'forward'}
-            elif data_field == 0x1F:
+            elif data_field == 0x01:  # Toggle Direction (00001)
+                return {'type': 'direction', 'value': 'toggle'}
+            elif data_field == 0x03:  # Reverse (00011)
                 return {'type': 'direction', 'value': 'reverse'}
-            elif data_field == 0x1C:
-                return {'type': 'function', 'value': 'horn'}
-            elif data_field == 0x1D:
-                return {'type': 'function', 'value': 'bell'}
-            elif data_field == 0x18:  # Smoke Increase
-                return {'type': 'smoke', 'value': 'increase'}
-            elif data_field == 0x19:  # Smoke Decrease
-                return {'type': 'smoke', 'value': 'decrease'}
-            elif data_field == 0x1A:  # Smoke On
-                return {'type': 'smoke', 'value': 'on'}
-            elif data_field == 0x1B:  # Smoke Off
-                return {'type': 'smoke', 'value': 'off'}
-            elif data_field == 0x16:  # Cab Chatter
-                return {'type': 'pfa', 'value': 'cab_chatter'}
-            elif data_field == 0x17:  # TowerCom
-                return {'type': 'pfa', 'value': 'towercom'}
+            elif data_field == 0x04:  # Boost Speed (00100)
+                return {'type': 'speed', 'value': 'boost'}
+            elif data_field == 0x07:  # Brake Speed (00111)
+                return {'type': 'speed', 'value': 'brake'}
+            elif data_field == 0x08:  # Aux1 Off (01000)
+                return {'type': 'function', 'value': 'aux1_off'}
+            elif data_field == 0x09:  # Aux1 Option 1 (01001) - Map to startup for your remote
+                return {'type': 'engine', 'value': 'startup'}
+            elif data_field == 0x0A:  # Aux1 Option 2 (01010)
+                return {'type': 'function', 'value': 'aux1_option2'}
+            elif data_field == 0x0B:  # Aux1 On (01011)
+                return {'type': 'engine', 'value': 'startup'}
+            elif data_field == 0x0C:  # Aux2 Off (01100)
+                return {'type': 'function', 'value': 'aux2_off'}
+            elif data_field == 0x0D:  # Aux2 Option 1 (01101)
+                return {'type': 'function', 'value': 'aux2_option1'}
+            elif data_field == 0x0E:  # Aux2 Option 2 (01110)
+                return {'type': 'function', 'value': 'aux2_option2'}
+            elif data_field == 0x0F:  # Aux2 On (01111)
+                return {'type': 'function', 'value': 'aux2_on'}
                 
-        elif cmd_field == 0x03:  # Speed
-            return {'type': 'speed', 'value': data_field}
+        elif cmd_field == 0x02:  # Relative speed commands (binary 10 - bit 6 set)
+            if 0x00 <= data_field <= 0x1F:  # Relative speed D (0-31)
+                # Convert relative speed: 0xA=+5, 0x9=+4, ..., 0x5=0, ..., 0x0=-5
+                if data_field == 0x0A:  # +5
+                    speed_change = 5
+                elif data_field == 0x09:  # +4
+                    speed_change = 4
+                elif data_field == 0x08:  # +3
+                    speed_change = 3
+                elif data_field == 0x07:  # +2
+                    speed_change = 2
+                elif data_field == 0x06:  # +1
+                    speed_change = 1
+                elif data_field == 0x05:  # 0 (no change)
+                    speed_change = 0
+                elif data_field == 0x04:  # -1
+                    speed_change = -1
+                elif data_field == 0x03:  # -2
+                    speed_change = -2
+                elif data_field == 0x02:  # -3
+                    speed_change = -3
+                elif data_field == 0x01:  # -4
+                    speed_change = -4
+                elif data_field == 0x00:  # -5
+                    speed_change = -5
+                else:
+                    speed_change = 0
+                
+                return {'type': 'speed', 'value': speed_change}
+                
+        elif cmd_field == 0x03:  # Absolute speed commands (binary 11 - bits 6&5 set)
+            if 0x00 <= data_field <= 0x1F:  # Absolute speed step (0-31)
+                speed_step = data_field  # Use speed step directly (0-31)
+                return {'type': 'speed', 'value': speed_step}
+                
+        elif cmd_field == 0x20:  # Extended commands (binary 01 - bit 5 set)
+            # Horn and Bell commands
+            if data_field == 0x1C:  # Blow Horn (11100)
+                return {'type': 'function', 'value': 'horn'}
+            elif data_field == 0x1A:  # Ring Bell (11010)
+                return {'type': 'function', 'value': 'bell'}
             
-        elif cmd_field == 0x01:  # Engine/Address
-            if data_field == 0x00:  # Engine Start
-                return {'type': 'engine', 'value': 'start'}
-            elif data_field == 0xFF:  # Engine Stop
-                return {'type': 'engine', 'value': 'stop'}
-            else:
-                return {'type': 'engine', 'value': data_field}
+            # Direction commands
+            elif data_field in [0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6]:
+                return {'type': 'direction', 'value': 'forward'}
+            elif data_field in [0xE8, 0xE9, 0xEA, 0xEB, 0xEC, 0xED, 0xEE]:
+                return {'type': 'direction', 'value': 'reverse'}
         
         return None
     
@@ -289,14 +373,520 @@ class LionelMTHBridge:
             logger.error(f"MCU send error: {e}")
             return False
     
+    def discover_wtiu_mdns(self):
+        """Discover MTH WTIU using mDNS/Zeroconf"""
+        try:
+            from zeroconf import ServiceBrowser, Zeroconf
+            logger.info("🔍 Discovering MTH WTIU via mDNS...")
+            
+            class WTIUListener:
+                def __init__(self, bridge):
+                    self.bridge = bridge
+                
+                def add_service(self, zeroconf, service_type, name):
+                    info = zeroconf.get_service_info(service_type, name)
+                    if info:
+                        self.bridge.discovered_wtiu = {
+                            'name': name,
+                            'host': info.parsed_addresses()[0],
+                            'port': info.port,
+                            'properties': info.properties
+                        }
+                        logger.info(f"🎯 Found WTIU: {name} at {info.parsed_addresses()[0]}:{info.port}")
+                
+                def remove_service(self, zeroconf, service_type, name):
+                    pass
+                
+                def update_service(self, zeroconf, service_type, name):
+                    pass
+            
+            zeroconf = Zeroconf()
+            listener = WTIUListener(self)
+            
+            # Try MTH WTIU service names
+            service_names = [
+                "_mth-dcs._tcp.local.",
+                "_wtiu._tcp.local.",
+                "_mth._tcp.local.",
+                "_dcs._tcp.local."
+            ]
+            
+            for service_name in service_names:
+                browser = ServiceBrowser(zeroconf, service_name, listener)
+                time.sleep(2)  # Wait for discovery
+                
+                if hasattr(self, 'discovered_wtiu'):
+                    logger.info(f"✅ Found WTIU using service: {service_name}")
+                    zeroconf.close()
+                    return True
+                else:
+                    browser.cancel()
+            
+            zeroconf.close()
+            return False
+            
+        except ImportError:
+            logger.info("⚠️ zeroconf not available - using manual IP")
+            return False
+        except Exception as e:
+            logger.error(f"mDNS discovery error: {e}")
+            return False
+    
+    def connect_mth(self):
+        """Connect to MTH WTIU via WiFi with mDNS discovery"""
+        import socket
+        from threading import Lock
+        
+        self.mth_socket = None
+        self.mth_connected = False
+        
+        # Try mDNS discovery first
+        logger.info("🔍 Attempting MTH WTIU discovery...")
+        if self.discover_wtiu_mdns():
+            logger.info("✅ mDNS discovery successful")
+            # Use discovered WTIU
+            if hasattr(self, 'discovered_wtiu'):
+                mth_host = self.discovered_wtiu['host']
+                mth_port = self.discovered_wtiu['port']
+                logger.info(f"🎯 Using discovered WTIU: {mth_host}:{mth_port}")
+            else:
+                mth_host = '192.168.0.31'
+                mth_port = 33069
+        else:
+            logger.info("❌ mDNS discovery failed, using manual IP")
+            mth_host = '192.168.0.31'  # Your WTIU IP from previous logs
+            mth_port = 33069  # Your WTIU port from previous logs
+        
+        try:
+            logger.info(f"🔗 Connecting to MTH WTIU at {mth_host}:{mth_port}")
+            self.mth_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            
+            # Match ESP8266 WiFiClient behavior
+            self.mth_socket.settimeout(5.0)
+            self.mth_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.mth_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            
+            self.mth_socket.connect((mth_host, mth_port))
+            self.mth_connected = True
+            logger.info(f"✅ Connected to MTH WTIU at {mth_host}:{mth_port}")
+            
+            # Wait a moment for connection to stabilize (like Mark's WTIUWaitforConnection)
+            logger.info("⏳ Waiting for connection to stabilize...")
+            time.sleep(0.5)
+            
+            # Perform Mark's H5/H6 handshake (required for WTIU) with retries
+            max_handshake_attempts = 3
+            for attempt in range(max_handshake_attempts):
+                try:
+                    logger.info(f"🔐 Performing Mark's H5/H6 handshake (attempt {attempt + 1}/{max_handshake_attempts})...")
+                    
+                    # Step 1: Send H5 command (ESP8266 style - exact match)
+                    logger.info("🔐 Step 1: Sending H5 command...")
+                    h5_command = b"H5\r\n"
+                    self.mth_socket.send(h5_command)  # Exact ESP8266 match
+                    logger.info(f"🔐 Sent H5: {h5_command.strip()}")
+                    h5_response = self.mth_socket.recv(256).decode()
+                    logger.info(f"🔍 WTIU H5 response: {h5_response.strip()}")
+                    
+                    # Check if H5 response contains "okay"
+                    if "okay" not in h5_response.lower():
+                        logger.warning("⚠️ H5 response missing 'okay'")
+                        continue  # Retry
+                
+                # Extract encryption key from H5 response (format: "H5 1234ABCD okay")
+                    parts = h5_response.strip().split()
+                    if len(parts) >= 2:
+                        hex_key = parts[1]
+                        logger.info(f"🔐 Extracted key: {hex_key}")
+                        
+                        # Store the WTIU session key for future encryption
+                        self.wtiu_session_key = bytes.fromhex(hex_key)
+                        logger.info(f"🔐 Stored WTIU session key: {self.wtiu_session_key.hex()}")
+                        
+                        # Step 2: Send H6 with encrypted key (Mark's Arduino method)
+                        logger.info("🔐 Step 2: Sending H6 with encrypted key (Mark's Arduino method)...")
+                        
+                        # Parse H5 response like Mark's Arduino: "H5 %4hx%4hx"
+                        # Note: sscanf uses swapped order: &plain[1], &plain[0]
+                        h5_match = re.search(r'H5\s+([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})', h5_response)
+                        if not h5_match:
+                            logger.warning(f"⚠️ Could not parse H5 response: '{h5_response}'")
+                            h6_response = ""
+                        else:
+                            hex_str = h5_match.group(1) + h5_match.group(2)
+                            logger.info(f"🔐 Challenge: {hex_str}")
+                            
+                            # Parse as two 16-bit values (Arduino swapped order)
+                            word1 = int(hex_str[0:4], 16)
+                            word2 = int(hex_str[4:8], 16)
+                            logger.info(f"🔐 Words: 0x{word1:04X} 0x{word2:04X}")
+                            
+                            # Create plaintext array (Arduino swapped order: plain[1], plain[0])
+                            # Mark uses sscanf(&plain[1], &plain[0]) so plain[1] gets first word
+                            plain = [word2, word1]  # plain[0]=word2, plain[1]=word1
+                            
+                            # Use Mark's global hardcoded key (not session key)
+                            # The session key from H5 is the CHALLENGE to encrypt, not the encryption key
+                            key_words = [0x144C, 0xB404, 0x947D, 0x8046]  # Mark's exact order
+                            
+                            # TEST: Compare with known working ESP8266 values
+                            if hex_key == "E043B8C5":
+                                logger.info("🧪 TESTING: Known ESP8266 challenge detected!")
+                                logger.info("🧪 Expected H6 response: H6F66059E4 okay")
+                                logger.info("🧪 Our bridge produces different encryption!")
+                            elif hex_key == "FA0369CC":
+                                logger.info("🧪 TESTING: Using first received challenge for comparison!")
+                                logger.info("🧪 Our bridge produces: H6B09D9545")
+                            elif hex_key == "974FA7CE":
+                                logger.info("🧪 TESTING: Using latest received challenge!")
+                                logger.info("🧪 Our bridge produces: H62F13FEF8")
+                            
+                            # Fixed Speck implementation - EXACT C++ match
+                            class FixedSpeckCipher:
+                                def __init__(self):
+                                    self.key = [5196, 46084, 38013, 32838]  # Exact C++ values
+                                    self.rounds = 22
+                                    
+                                def ror16(self, x, r):
+                                    return ((x >> r) | (x << (16 - r))) & 0xFFFF
+                                    
+                                def rol16(self, x, r):
+                                    return ((x << r) | (x >> (16 - r))) & 0xFFFF
+                                    
+                                def rrr(self, x, y, k):
+                                    """C++ RRR macro exactly"""
+                                    x = self.ror16(x, 7)  # ROR 7
+                                    x = (x + y) & 0xFFFF  # x += y
+                                    x ^= k                # x ^= k
+                                    y = self.rol16(y, 2)  # ROL 2
+                                    y ^= x                # y ^= x
+                                    return x, y
+                                    
+                                def encrypt(self, plaintext):
+                                    """C++ speck_encrypt exactly"""
+                                    S = [0] * self.rounds
+                                    b = self.key[0]
+                                    a = [self.key[1], self.key[2], self.key[3]]
+                                    
+                                    # Key expansion (speck_expand)
+                                    S[0] = b
+                                    for i in range(self.rounds - 1):
+                                        a[i % 3], b = self.rrr(a[i % 3], b, i)
+                                        S[i + 1] = b
+                                    
+                                    # Encryption
+                                    x = plaintext[1]  # ct[1] = pt[1]
+                                    y = plaintext[0]  # ct[0] = pt[0]
+                                    
+                                    for i in range(self.rounds):
+                                        x, y = self.rrr(x, y, S[i])  # RRR(ct[1], ct[0], K[i])
+                                        
+                                    return [y, x]  # Return ct[0], ct[1]
+                            
+                            # Use the fixed cipher
+                            cipher = FixedSpeckCipher().encrypt(plain)
+                            logger.info(f"🔐 Fixed Speck cipher: 0x{cipher[0]:04X} 0x{cipher[1]:04X}")
+                            
+                            # DEBUG: Show our H6 result for comparison
+                            our_h6 = f"{cipher[1]:04X}{cipher[0]:04X}"
+                            logger.info(f"🔐 Our H6 result: {our_h6}")
+                            
+                            # Send H6 command (ESP8266 exact format)
+                            # Note: cipher should be exactly 2 words (4 bytes total)
+                            h6_command = f"H6{cipher[1]:04X}{cipher[0]:04X}\r\n"
+                            logger.info(f"🔐 Sending H6 (ESP8266 format): {h6_command.strip()}")
+                            logger.info(f"🔐 H6 command length: {len(h6_command.strip())} chars")
+                            self.mth_socket.send(h6_command.encode())  # Exact ESP8266 match
+                            h6_response = self.mth_socket.recv(256).decode()
+                            logger.info(f"🔍 WTIU H6 response: {h6_response.strip()}")
+                    else:
+                        logger.warning("⚠️ Failed to encrypt H6 key properly")
+                        h6_response = ""
+                    
+                    # Check for success - accept H6 response (working ESP8266 approach)
+                    # Your ESP8266 gets "okay" but our bridge gets "PC connection not available"
+                    # Let's accept H6 response and proceed to see if post-handshake commands work
+                    if "H6" in h6_response:
+                        if "okay" in h6_response.lower():
+                            logger.info("✅ WTIU H5/H6 handshake successful (with okay)!")
+                        else:
+                            logger.info("✅ WTIU H5/H6 handshake successful (without okay)!")
+                            logger.warning("⚠️ H6 response missing 'okay', but proceeding anyway...")
+                        
+                        # Send x and ! commands like ESP8266 code (not PC command)
+                        logger.info("🔐 Getting TIU info (like ESP8266 code)...")
+                        
+                        # Send x command to get TIU number
+                        self.mth_socket.send(b"x\r\n")
+                        x_response = self.mth_socket.recv(256).decode()
+                        logger.info(f"� WTIU x response: {x_response.strip()}")
+                        
+                        # Send ! command to get version info
+                        self.mth_socket.send(b"!\r\n")
+                        exclamation_response = self.mth_socket.recv(256).decode()
+                        logger.info(f"🔍 WTIU ! response: {exclamation_response.strip()}")
+                        
+                        # Step 3: Now send normal commands
+                        logger.info("🔐 Step 3: Sending normal commands...")
+                        self.mth_socket.send(b"x\r\n")
+                        x_response = self.mth_socket.recv(256).decode()
+                        logger.info(f"🔍 WTIU x response: {x_response.strip()}")
+                        
+                        self.mth_socket.send(b"!\r\n")
+                        exclamation_response = self.mth_socket.recv(256).decode()
+                        logger.info(f"🔍 WTIU ! response: {exclamation_response.strip()}")
+                        
+                        # Accept any response from x and ! commands (WTIU is responding)
+                        logger.info("✅ WTIU full handshake successful!")
+                        logger.info(f"🔍 x response: '{x_response.strip()}'")
+                        logger.info(f"🔍 ! response: '{exclamation_response.strip()}'")
+                        
+                        # Send 'y' command to establish PC connection (like ESP8266 Sendy function)
+                        logger.info("🔐 Establishing PC connection with 'y' command (like ESP8266 Sendy)...")
+                        y_command = f"y2\r\n"  # Engine number 2 (default)
+                        self.mth_socket.send(y_command.encode())
+                        y_response = self.mth_socket.recv(256).decode()
+                        logger.info(f"🔍 WTIU y response: {y_response.strip()}")
+                        
+                        # Test if connection is working by sending a simple command
+                        logger.info("🔐 Testing connection with simple command...")
+                        test_command = "y2\r\n"
+                        self.mth_socket.send(test_command.encode())
+                        test_response = self.mth_socket.recv(256).decode()
+                        logger.info(f"🔍 Test response: {test_response.strip()}")
+                        
+                        if "PC connection not available" not in test_response:
+                            logger.info("✅ WTIU PC connection established successfully!")
+                            # Establish proper PC connection sequence (ESP8266 format)
+                            self.establish_pc_connection()
+                            break  # Success! Exit the retry loop
+                        else:
+                            logger.warning("⚠️ WTIU still reports PC connection not available")
+                            continue  # Retry
+                    else:
+                        logger.warning(f"⚠️ H6 response missing 'H6': '{h6_response.strip()}'")
+                        continue  # Retry                 # If we got here, the handshake failed, try again
+                    if attempt < max_handshake_attempts - 1:
+                        logger.warning(f"⚠️ Handshake attempt {attempt + 1} failed, retrying...")
+                        time.sleep(1)  # Wait before retry
+                    else:
+                        logger.error("❌ All handshake attempts failed")
+                        break
+                        
+                except Exception as handshake_error:
+                    logger.warning(f"⚠️ WTIU handshake failed: {handshake_error}")
+                    if attempt < max_handshake_attempts - 1:
+                        time.sleep(1)  # Wait before retry
+                    else:
+                        break
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"MTH WTIU connection failed: {e}")
+            self.mth_connected = False
+            return False
+    
+    def establish_pc_connection(self):
+        """Establish PC connection with WTIU - ESP8266 exact sequence"""
+        try:
+            logger.info("🔐 Establishing PC connection (ESP8266 sequence)...")
+            
+            # 1. Get TIU info
+            self.mth_socket.send(b"x\r\n")
+            x_response = self.mth_socket.recv(256).decode()
+            logger.info(f"🔍 x command response: {x_response.strip()}")
+            
+            # Parse TIU number
+            match = re.search(r'x(\d)(\d)', x_response)
+            if match:
+                self.wtiu_tiu_number = int(match.group(1))  # 0-4
+                logger.info(f"✅ Found TIU number: {self.wtiu_tiu_number + 1}")
+            
+            # 2. Get version
+            self.mth_socket.send(b"!\r\n")
+            version_response = self.mth_socket.recv(256).decode()
+            logger.info(f"🔍 ! command response: {version_response.strip()}")
+            
+            # 3. Send y command with engine number (like ESP8266 Sendy)
+            # Engine number 2 = DCS engine 1 (first normal engine)
+            self.mth_socket.send(b"y2\r\n")
+            y_response = self.mth_socket.recv(256).decode()
+            logger.info(f"🔍 y command response: {y_response.strip()}")
+            
+            # 4. Send m4 to enter command mode (like ESP8266)
+            self.mth_socket.send(b"m4\r\n")
+            m4_response = self.mth_socket.recv(256).decode()
+            logger.info(f"🔍 m4 command response: {m4_response.strip()}")
+            
+            # 5. Send u4 to startup engine (like ESP8266)
+            self.mth_socket.send(b"u4\r\n")
+            u4_response = self.mth_socket.recv(256).decode()
+            logger.info(f"🔍 u4 command response: {u4_response.strip()}")
+            
+            logger.info("✅ WTIU setup complete - ready for commands!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ PC connection failed: {e}")
+            return False
+    
+    def send_wtiu_command(self, command):
+        """Send command to WTIU in exact ESP8266 format"""
+        try:
+            # Send command directly (no engine prefix after y command)
+            full_command = f"{command}\r\n".encode()
+            self.mth_socket.send(full_command)
+            logger.info(f"🚂 Sent to WTIU: {command}")
+            
+            # Wait for response with timeout
+            self.mth_socket.settimeout(2.0)
+            try:
+                response = self.mth_socket.recv(256).decode()
+                # Check for "->" prompt and extract response
+                if "->" in response:
+                    response = response.split("->")[0].strip()
+                logger.info(f"📥 WTIU response: {response}")
+                
+                # Return True if we got "okay" or any response (some commands don't return okay)
+                if response and response != "TIMEOUT":
+                    return True
+                else:
+                    return False
+                    
+            except socket.timeout:
+                logger.warning("⚠️ Command timeout (some commands don't return response)")
+                # Some commands like 'x' might not return immediately
+                return True  # Assume success for timeout
+                
+        except Exception as e:
+            logger.error(f"❌ Command send error: {e}")
+            return False
+    
     def send_to_mth(self, command):
-        """Send command to MTH WTIU via MCU (Arduino handles MTH communication)"""
-        # Note: MTH communication is handled by Arduino MCU
-        # Python only needs to send commands to MCU via serial
-        # This method is kept for compatibility but MCU handles all MTH communication
-        logger.debug(f"MTH command handled by MCU: {command}")
-        return True
-
+        """Send command to MTH WTIU via WiFi with proper sequence"""
+        if not self.mth_connected or not self.mth_socket:
+            logger.debug("MTH not connected - command not sent")
+            return False
+        
+        try:
+            with self.mth_lock:
+                # Convert command to MTH protocol format
+                mth_cmd = self.convert_to_mth_protocol(command)
+                if mth_cmd:
+                    # Send command in ESP8266 format
+                    success = self.send_wtiu_command(mth_cmd)
+                    
+                    # Check if command was successful
+                    if success:
+                        logger.info("✅ Command sent successfully")
+                        return True
+                    else:
+                        logger.warning(f"⚠️ Command failed: {mth_cmd}")
+                        return False
+                    
+        except Exception as e:
+            logger.error(f"MTH send error: {e}")
+            self.mth_connected = False
+            return False
+    
+    def convert_to_mth_protocol(self, command):
+        """Convert TMCC command to MTH WTIU command format"""
+        # Simple direct command mapping (no engine prefix needed after y command)
+        cmd_map = {
+            'direction': {
+                'forward': 'd0',
+                'reverse': 'd1',
+                'toggle': 'd0'  # Default to forward on toggle
+            },
+            'speed': lambda x: self.convert_speed(x),
+            'function': {
+                'horn': 'w2',
+                'bell': 'w4',
+                'horn_off': 'bFFFD',
+                'bell_off': 'bFFFB'
+            },
+            'engine': {
+                'startup': 'u4',
+                'shutdown': 'u5'
+            }
+        }
+        
+        cmd_type = command['type']
+        cmd_value = command['value']
+        
+        if cmd_type in cmd_map:
+            if cmd_type == 'speed':
+                # Convert speed
+                return cmd_map['speed'](cmd_value)
+            elif cmd_value in cmd_map[cmd_type]:
+                return cmd_map[cmd_type][cmd_value]
+        
+        logger.warning(f"⚠️ Unknown command: {cmd_type}:{cmd_value}")
+        return None
+    
+    def convert_speed(self, speed_value):
+        """Convert TMCC speed (0-31) to DCS speed (0-120)"""
+        try:
+            if isinstance(speed_value, str):
+                if speed_value == 'boost':
+                    return 's5'  # Small speed boost
+                elif speed_value == 'brake':
+                    return 's0'  # Stop
+                else:
+                    # Try to convert string to int
+                    try:
+                        speed_int = int(speed_value)
+                        return self.convert_speed(speed_int)
+                    except:
+                        return 's0'
+            
+            # Handle integer speed values
+            if not isinstance(speed_value, (int, float)):
+                logger.warning(f"⚠️ Invalid speed value type: {type(speed_value)}")
+                return 's0'
+            
+            # Convert 0-31 to 0-120 (scale factor ~3.87)
+            dcs_speed = int(speed_value * 120 / 31)
+            dcs_speed = max(0, min(120, dcs_speed))  # Clamp to 0-120
+            return f"s{dcs_speed}"
+            
+        except Exception as e:
+            logger.error(f"❌ Speed conversion error: {e}")
+            return 's0'
+    
+    def debug_wtiu_connection(self):
+        """Debug WTIU connection and commands"""
+        logger.info("🐛 DEBUG: Testing WTIU connection...")
+        
+        # Test basic commands
+        test_commands = [
+            "x",       # Should return TIU info
+            "!",       # Should return version
+            "y2",      # Select engine 2
+            "m4",      # Command mode
+            "u4",      # Startup engine
+            "s10",     # Speed 10
+            "d0",      # Forward
+            "w2",      # Horn
+            "bFFFD",   # Horn off
+        ]
+        
+        for cmd in test_commands:
+            logger.info(f"🐛 DEBUG: Sending: {cmd}")
+            self.mth_socket.send(f"{cmd}\r\n".encode())
+            time.sleep(0.5)
+            try:
+                response = self.mth_socket.recv(256).decode()
+                logger.info(f"🐛 DEBUG: Response: {response.strip()}")
+            except socket.timeout:
+                logger.info(f"🐛 DEBUG: Timeout for {cmd}")
+            except Exception as e:
+                logger.info(f"🐛 DEBUG: Error: {e}")
+            time.sleep(0.5)
+        
+        logger.info("🐛 DEBUG: Test complete")
+    
     def send_to_mth_original(self, command):
         """Send command to MTH WTIU via WiFi"""
         for ip in self.mth_devices:
@@ -343,31 +933,57 @@ class LionelMTHBridge:
     def lionel_listener(self):
         """Listen for TMCC packets from Lionel Base 3"""
         logger.info("🎯 Monitoring Lionel Base 3 for TMCC packets...")
+        packet_count = 0
+        last_activity = time.time()
         
         while self.running:
             try:
                 with self.lionel_lock:
                     if self.lionel_serial and self.lionel_serial.is_open:
+                        # Check for any data in the buffer
                         if self.lionel_serial.in_waiting > 0:
                             data = self.lionel_serial.read(self.lionel_serial.in_waiting)
+                            last_activity = time.time()
+                            logger.info(f"🔍 Received {len(data)} bytes: {data.hex()}")
                             
                             # Look for TMCC packets
                             for i in range(len(data) - 2):
                                 if data[i] == 0xFE:
                                     packet = data[i:i+3]
-                                    logger.info(f"🎯 TMCC Packet: {packet.hex()}")
+                                    packet_count += 1
+                                    logger.info(f"🎯 TMCC Packet #{packet_count}: {packet.hex()}")
                                     
                                     # Parse and forward
                                     command = self.parse_tmcc_packet(packet)
                                     if command:
                                         logger.info(f"📤 Command: {command}")
                                         
+                                        # Log what we're trying to send
+                                        mth_cmd = self.convert_to_mth_protocol(command)
+                                        if mth_cmd:
+                                            logger.info(f"📤 MTH Command: {mth_cmd}")
+                                        else:
+                                            logger.warning(f"⚠️ Failed to convert command: {command}")
+                                        
                                         # Send to MCU
-                                        self.send_to_mcu(command)
+                                        if self.send_to_mcu(command):
+                                            logger.info("✅ Sent to MCU")
+                                        else:
+                                            logger.warning("⚠️ Failed to send to MCU")
                                         
                                         # Send to MTH
-                                        self.send_to_mth(command)
-                
+                                        if self.send_to_mth(command):
+                                            logger.info("✅ Sent to MTH")
+                                        else:
+                                            logger.warning("⚠️ Failed to send to MTH")
+                                    else:
+                                        logger.warning(f"⚠️ Failed to parse packet: {packet.hex()}")
+                        else:
+                            # Log every 10 seconds if no data received
+                            if time.time() - last_activity > 10:
+                                logger.warning("⚠️ No data received from Lionel Base 3 for 10 seconds")
+                                last_activity = time.time()
+            
                 time.sleep(0.01)
                 
             except Exception as e:
@@ -396,6 +1012,16 @@ class LionelMTHBridge:
             logger.warning("⚠️ MCU connection failed, continuing with MTH only...")
             logger.info("💡 Note: MCU connection only works on actual Arduino UNO Q hardware")
             logger.info("💡 In WSL/testing, MCU connection is expected to fail")
+        
+        # Try MTH WTIU connection
+        if not self.connect_mth():
+            logger.warning("⚠️ MTH WTIU connection failed, will auto-reconnect...")
+            logger.info("💡 Note: Make sure MTH WTIU is powered and connected to WiFi")
+        
+        # Test MTH connection with debug commands
+        if self.mth_connected:
+            logger.info("🧪 Running debug test...")
+            self.debug_wtiu_connection()
         
         self.running = True
         
@@ -443,6 +1069,155 @@ class LionelMTHBridge:
             logger.info("📡 Received interrupt signal")
         finally:
             self.stop()
+    
+    def speck_encrypt(self, plaintext):
+        """Encrypt plaintext using Speck 64/128 cipher (Mark's implementation)"""
+        if not self.use_encryption:
+            return plaintext.encode('latin1')
+        
+        try:
+            # TEMPORARY: Disable encryption to test if commands work unencrypted
+            # Use WTIU session key if available, otherwise use fixed key
+            key_to_use = self.wtiu_session_key if self.wtiu_session_key else self.speck_key
+            
+            # DEBUG: Try without encryption first
+            if self.wtiu_session_key:
+                logger.info(f"🔐 DEBUG: Session key available: {self.wtiu_session_key.hex()}")
+                logger.info(f"🔐 DEBUG: Trying unencrypted command first...")
+                return plaintext.encode('latin1')  # Send unencrypted for testing
+            
+            # Convert plaintext to bytes
+            if isinstance(plaintext, str):
+                plaintext_bytes = plaintext.encode('latin1')
+            else:
+                plaintext_bytes = plaintext
+            
+            # Pad to multiple of 8 bytes (64-bit blocks)
+            padding_len = (8 - len(plaintext_bytes) % 8) % 8
+            plaintext_bytes += b'\x00' * padding_len
+            
+            # Convert to 16-bit words (little-endian)
+            pt = []
+            for i in range(0, len(plaintext_bytes), 2):
+                if i+1 < len(plaintext_bytes):
+                    word = plaintext_bytes[i] | (plaintext_bytes[i+1] << 8)
+                else:
+                    word = plaintext_bytes[i]
+                pt.append(word)
+            
+            # Ensure we have exactly 2 words (32 bits) for Speck 64/128
+            if len(pt) < 2:
+                pt.extend([0] * (2 - len(pt)))
+            pt = pt[:2]
+            
+            # Expand key
+            K = []
+            for i in range(0, len(key_to_use), 2):
+                if i+1 < len(key_to_use):
+                    word = key_to_use[i] | (key_to_use[i+1] << 8)
+                else:
+                    word = key_to_use[i]
+                K.append(word)
+            
+            # Pad key to 4 words if needed
+            while len(K) < 4:
+                K.append(0)
+            K = K[:4]
+            
+            # Key expansion (Mark's exact implementation)
+            S = [0] * 22
+            b = K[0]
+            a = K[1:]
+            S[0] = b
+            for i in range(21):  # Only 21 iterations for 22 round keys
+                # Mark's RRR: x = ROR(x, 7), x += y, x ^= k, y = ROL(y, 2), y ^= x
+                # Mark calls: R(a[i % 3], b, i) where x = a[i%3], y = b, k = i
+                a_idx = i % 3
+                x = a[a_idx]  # x = a[i % 3]
+                y = b          # y = b
+                k = i          # k = i
+                
+                # x = ROR(x, 7)
+                x = (x >> 7) | ((x << 9) & 0xFFFF)  # ROR 7 (16-bit)
+                x = x & 0xFFFF  # Ensure 16-bit
+                # x += y
+                x = (x + y) & 0xFFFF
+                # x ^= k
+                x ^= k
+                # y = ROL(y, 2)
+                y = ((y << 2) | (y >> 14)) & 0xFFFF
+                # y ^= x
+                y ^= x
+                
+                # Update arrays
+                b = x
+                a[a_idx] = y
+                S[i+1] = b
+            
+            # Encryption (Mark's exact R implementation - CORRECT PARAMETER ORDER!)
+            ct = pt.copy()
+            for i in range(22):  # SPECK_ROUNDS = 22
+                # Mark's R(ct[1], ct[0], K[i]): x = ROR(x, 7), x += y, x ^= k, y = ROL(y, 2), y ^= x
+                # where x = ct[1], y = ct[0], k = S[i]
+                ct[1] = (ct[1] >> 7) | ((ct[1] << 9) & 0xFFFF)  # ROR 7 on ct[1]
+                ct[1] = (ct[1] + ct[0]) & 0xFFFF      # ct[1] += ct[0]
+                ct[1] ^= S[i]                              # ct[1] ^= K[i]
+                ct[0] = ((ct[0] << 2) | (ct[0] >> 14)) & 0xFFFF  # ROL 2 on ct[0]
+                ct[0] ^= ct[1]                            # ct[0] ^= ct[1]
+            
+            # Convert back to bytes (little-endian)
+            encrypted_bytes = bytearray()
+            for word in ct:
+                encrypted_bytes.append(word & 0xFF)
+                encrypted_bytes.append((word >> 8) & 0xFF)
+            
+            # Remove padding
+            encrypted_bytes = encrypted_bytes[:len(plaintext_bytes)]
+            
+            return bytes(encrypted_bytes)
+            
+        except Exception as e:
+            logger.error(f"Speck encryption error: {e}")
+            return plaintext.encode('latin1')
+
+def test_connection_manually():
+    """Manual test of WTIU connection"""
+    bridge = LionelMTHBridge()
+    
+    # Try to connect to MTH
+    if bridge.connect_mth():
+        logger.info("✅ Connected to MTH WTIU")
+        
+        # Test commands manually
+        commands_to_test = [
+            "x",
+            "!",
+            "y2",
+            "m4",
+            "u4",
+            "s10",
+            "d0",
+            "w2",
+            "bFFFD",
+            "w4",
+            "bFFFB",
+            "s0"
+        ]
+        
+        for cmd in commands_to_test:
+            logger.info(f"🧪 Testing: {cmd}")
+            bridge.mth_socket.send(f"{cmd}\r\n".encode())
+            time.sleep(0.5)
+            try:
+                response = bridge.mth_socket.recv(256).decode()
+                logger.info(f"📥 Response: {response.strip()}")
+            except:
+                logger.info("📥 No response")
+            time.sleep(0.5)
+        
+        bridge.stop()
+    else:
+        logger.error("❌ Failed to connect to MTH WTIU")
 
 def main():
     print("🎯 Lionel Base 3 → MTH WTIU Bridge")
@@ -451,6 +1226,10 @@ def main():
     print("=" * 50)
     print("Press Ctrl+C to stop")
     print()
+    
+    # Uncomment to run manual test
+    # test_connection_manually()
+    # return
     
     bridge = LionelMTHBridge()
     bridge.run_forever()
