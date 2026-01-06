@@ -59,7 +59,7 @@ Lionel Remote → Base 3 → SER2 → FTDI → Arduino UNO Q → WiFi → MTH WT
 
 1. Connect SER2 to Lionel Base 3 LCS port
 2. Connect FTDI cable to SER2 DB9 port
-3. Connect FTDI USB to Arduino UNO Q
+3. Connect FTDI USB to USB Hub with PD to Arduino UNO Q
 4. Power on MTH WTIU and connect to your WiFi network
 
 ### 2. Arduino UNO Q First-Time Setup
