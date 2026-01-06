@@ -44,6 +44,7 @@ This project bridges Lionel's TMCC/Legacy command system to MTH's DCS system, al
 | FTDI USB-Serial | Any 9600 baud | Connect SER2 to computer |
 | MTH WTIU | 50-1039 | WiFi DCS interface |
 | Arduino UNO Q | ABX00162 | Bridge processor |
+| USB Hub with PD |
 
 ### Connection Diagram
 
