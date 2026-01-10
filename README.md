@@ -1,139 +1,151 @@
-# Lionel-MTH Bridge
+# Lionel MTH Bridge
 
 **Control MTH DCS trains using your Lionel Cab-1L, Cab-2, or Cab-3 remote**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Status: Beta](https://img.shields.io/badge/Status-Beta-yellow.svg)]()
-
----
-## Credits
-
-- **Mark DiVecchio** - MTH WTIU protocol research ([silogic.com](http://www.silogic.com/trains/RTC_Running.html))
-- **Lionel LLC** - TMCC protocol documentation
-- **O Gauge Railroading Forum** - Community support
+[![Beta Release](https://img.shields.io/badge/Status-Beta-orange.svg)]()
 
 ---
 
 ## What Is This?
 
-This project bridges Lionel's TMCC/Legacy command system to MTH's DCS system, allowing you to control MTH DCS locomotives using your existing Lionel remote control.
+This bridge translates Lionel TMCC and Legacy commands to MTH DCS commands, letting you control MTH Proto-Sound 2 and Proto-Sound 3 locomotives with your Lionel remote. Full support for both TMCC (32-step speed) and Legacy (200-step speed) protocols.
 
-**Use your Lionel remote → Control MTH trains**
+### Key Features
 
----
-
-## Features
-
-- **Whistle** - Hold button to blow, release to stop
-- **Bell** - Toggle on/off with each press  
-- **Speed Control** - Smooth relative speed changes
-- **Direction** - Toggle forward/reverse
-- **Startup/Shutdown** - Full engine sequences
-- **Smoke On/Off** - Control smoke unit
-- **Volume Up/Down** - Adjust master volume
+- **Dual Protocol Support** - TMCC and Legacy protocols fully supported
+- **200-Step Speed Control** - Legacy's fine-grained speed control mapped to DCS sMPH
+- **ProtoWhistle/Quilling Horn** - Legacy whistle slider controls MTH whistle pitch
+- **Extended Startup/Shutdown** - Hold power button for full startup/shutdown sequences
+- **PFA Announcements** - Passenger/Freight announcements via CAB3
+- **Auto Engine Discovery** - Automatically discovers MTH engines on WTIU
 
 ---
 
-## Hardware Requirements
+## Hardware Required
 
-| Component | Model | Purpose |
-|-----------|-------|---------|
-| Lionel Base 3 | 6-82972 | TMCC command receiver |
-| Lionel Remote | Cab-1L, Cab-2, or Cab-3 | Your controller |
-| Lionel LCS SER2 | 6-81326 | Serial output from Base 3 |
-| FTDI USB-Serial | Any 9600 baud | Connect SER2 to computer |
-| MTH WTIU | 50-1039 | WiFi DCS interface |
-| Arduino UNO Q | ABX00162 | Bridge processor |
-| USB Hub with PD |
+| Component | Purpose |
+|-----------|---------|
+| **Lionel Base 3** (6-82972) | Receives commands from remote |
+| **Lionel Remote** (Cab-1L, Cab-2, or Cab-3) | Your controller |
+| **Lionel LCS SER2** (6-81326) | Serial output from Base 3 |
+| **FTDI USB-Serial Adapter** | Connects SER2 to Arduino |
+| **MTH WTIU** (50-1039) | WiFi interface to DCS track |
+| **Arduino UNO Q** (ABX00162) | Runs the bridge software |
+| **USB Hub with Power Delivery** | Powers the Arduino |
 
-### Connection Diagram
-
+**Connection:**
 ```
-Lionel Remote → Base 3 → SER2 → FTDI → Arduino UNO Q → WiFi → MTH WTIU → Track
+Remote → Base 3 → SER2 → FTDI → Arduino UNO Q → WiFi → WTIU → Track
 ```
 
 ---
 
-## Quick Start
+## Installation
 
-### 1. Hardware Setup
+### Step 1: Hardware Setup
 
 1. Connect SER2 to Lionel Base 3 LCS port
-2. Connect FTDI cable to SER2 DB9 port
-3. Connect FTDI USB to USB Hub with PD to Arduino UNO Q
+2. Connect FTDI cable to SER2 DB9 port  
+3. Connect FTDI USB to Arduino UNO Q (via USB hub)
 4. Power on MTH WTIU and connect to your WiFi network
 
-### 2. Arduino UNO Q First-Time Setup
+### Step 2: Arduino UNO Q Setup
 
-If this is your first time using the Arduino UNO Q:
+1. Download **Arduino App Lab** from arduino.cc
+2. Connect Arduino via USB-C and open App Lab
+3. Go to **Settings → Network** and connect to your WiFi
+4. Note the Arduino's IP address (e.g., `192.168.0.5`)
 
-1. **Download Arduino App Lab** from the Arduino website
-2. **Connect the board** via USB-C to your computer
-3. **Open Arduino App Lab** and follow the setup wizard
-4. **Connect to WiFi**:
-   - In App Lab, go to **Settings → Network**
-   - Select your WiFi network (must be the **same network** as your MTH WTIU)
-   - Enter your WiFi password
-   - Note the board's IP address once connected
-5. **Verify network connectivity**:
-   - The WTIU and Arduino must be on the same subnet (e.g., both on `192.168.0.x`)
+> **Important:** Arduino and WTIU must be on the same network subnet
 
-### 3. Software Installation
+### Step 3: Create Project in Arduino App Lab
 
-SSH into your Arduino UNO Q:
+1. Open **Arduino App Lab** and connect to your Arduino UNO Q
+2. Click **New Project** and name it `lcs-to-mth-bridge`
+3. App Lab will automatically create the folder structure:
+   ```
+   /home/arduino/ArduinoApps/lcs-to-mth-bridge/
+   ├── python/    ← Python scripts go here
+   └── sketch/    ← Arduino sketch goes here
+   ```
+
+4. Upload these files to the `python/` folder:
+   - `lionel_mth_bridge.py` (main bridge script)
+   - `install.sh` (installer script)
+   - `lionel-mth-bridge.service` (systemd service file)
+
+5. Upload to the `sketch/` folder:
+   - `mcu_mth_handler.ino` (Arduino sketch for hardware control)
+
+6. In App Lab, click **Run** to flash it to the Arduino
+
+### Step 4: Run the Installer
+
+In App Lab, click the **Connect to the board's shell** button to open the board's terminal, then run:
 
 ```bash
-ssh arduino@<your-board-ip>
-
-# Install dependencies
-sudo apt update
-sudo apt install -y python3-serial python3-zeroconf python3-pycryptodome
-
-# Copy the bridge script
-cd /home/arduino/ArduinoApps
-mkdir -p lcs-to-mth-bridge/python
-cd lcs-to-mth-bridge/python
+cd /home/arduino/ArduinoApps/lcs-to-mth-bridge/python
+chmod +x install.sh
+./install.sh
 ```
 
-Copy `lionel_mth_bridge.py` and `lionel-mth-bridge.service` to this directory.
+The installer will:
+- Install Python dependencies
+- Create the configuration file
+- Set up the systemd service
+- Start the bridge
 
-### 4. Configure Auto-Start Service
+### Step 5: Add Engines to MTH WTIU
 
-To have the bridge start automatically when the Arduino boots:
+**Before using the bridge**, you must add your MTH engines to the WTIU database using the MTH app:
 
-```bash
-# Copy the service file to systemd
-sudo cp lionel-mth-bridge.service /etc/systemd/system/
+1. Open the **MTH DCS app** on your phone/tablet
+2. Connect to your WTIU
+3. Go to **Add Engine** and follow the prompts to add each locomotive
+4. Note the engine number shown in the app (e.g., "Engine 48")
 
-# Reload systemd to recognize the new service
-sudo systemctl daemon-reload
+> **Important:** The bridge can only control engines that are already in the WTIU database
 
-# Enable the service to start on boot
-sudo systemctl enable lionel-mth-bridge.service
+### Step 6: Configuration (Optional)
 
-# Start the service now
-sudo systemctl start lionel-mth-bridge.service
+The bridge auto-discovers MTH engines and maps them automatically. Most users won't need to change anything.
 
-# Check status
-sudo systemctl status lionel-mth-bridge.service
+**Default config (`bridge_config.json`):**
+```json
+{
+  "lionel_port": "/dev/ttyUSB0",
+  "legacy_enabled": true,
+  "mth_host": "auto",
+  "mth_port": "auto"
+}
 ```
 
-**Service Commands:**
+**How engine mapping works:**
+- Set your Lionel remote to the same engine number as shown in the MTH app
+- Example: MTH app shows "Engine 48" → Use Lionel engine address 48
+- The bridge handles the internal DCS addressing automatically
 
-| Command | Description |
-|---------|-------------|
-| `sudo systemctl start lionel-mth-bridge` | Start the bridge |
-| `sudo systemctl stop lionel-mth-bridge` | Stop the bridge |
-| `sudo systemctl restart lionel-mth-bridge` | Restart the bridge |
-| `sudo systemctl status lionel-mth-bridge` | Check status |
-| `sudo journalctl -u lionel-mth-bridge -f` | View live logs |
+**Optional manual mapping** (only if needed):
+```json
+{
+  "engine_mappings": {
+    "10": 49
+  }
+}
+```
+This would map Lionel #10 to MTH engine 48 (use the MTH app number + 1 for the DCS value).
 
-### 5. Manual Run (Optional)
+### Step 7: Verify It's Working
 
-If you prefer to run manually instead of using the service:
-
+Check the service status:
 ```bash
-python3 lionel_mth_bridge.py
+sudo systemctl status lionel-mth-bridge
+```
+
+View live logs:
+```bash
+sudo journalctl -u lionel-mth-bridge -f
 ```
 
 You should see:
@@ -145,91 +157,101 @@ You should see:
 
 ---
 
-## Remote Control Mapping
+## Verified Commands
 
-### Lionel Cab-1L / Cab-2 / Cab-3
+### TMCC1 Mode
 
-| Button | Function | MTH Action |
-|--------|----------|------------|
-| **Whistle** | Hold to blow | Whistle on while held |
-| **Bell** | Press to toggle | Bell on/off |
-| **Speed Knob** | Turn | Relative speed change |
-| **Direction** | Press | Toggle forward/reverse |
-| **AUX1** | Startup | Engine startup sequence |
-| **Keypad 5** | Shutdown | Engine shutdown sequence |
-| **Keypad 8** | Smoke Off | Turn smoke unit off |
-| **Keypad 9** | Smoke On | Turn smoke unit on |
-| **Keypad 1** | Volume Up | Increase master volume |
-| **Keypad 4** | Volume Down | Decrease master volume |
+| Button/Control | MTH Action | Status |
+|----------------|------------|--------|
+| **Speed Knob** | Speed control (32-step → 0-120 sMPH) | ✅ Verified |
+| **Direction** | Toggle forward/reverse | ✅ Verified |
+| **Whistle** (hold) | Whistle on while held | ✅ Verified |
+| **Bell** (press) | Toggle bell on/off | ✅ Verified |
+| **AUX1** | Quick engine startup | ✅ Verified |
+| **Keypad 2** | PFA announcements (start/advance) | ✅ Verified |
+| **Keypad 5** | Quick engine shutdown | ✅ Verified |
+| **Keypad 8** | Smoke off | ✅ Verified |
+| **Keypad 9** | Smoke on | ✅ Verified |
+| **Front Coupler** | Fire front coupler | ✅ Verified |
+| **Rear Coupler** | Fire rear coupler | ✅ Verified |
+
+### Legacy Mode
+
+| Button/Control | MTH Action | Status |
+|----------------|------------|--------|
+| **Speed Knob** | 200-step speed → 0-120 sMPH (fine control) | ✅ Verified |
+| **Direction** | Direct forward/reverse control | ✅ Verified |
+| **Whistle Slider** | ProtoWhistle with 4-level pitch control | ✅ Verified |
+| **Bell** (hold >0.5s) | Toggle bell on/off | ✅ Verified |
+| **Bell** (quick press) | Single bell ring | ✅ Verified |
+| **Power Button** (quick) | Quick startup | ✅ Verified |
+| **Power Button** (hold) | Extended startup sequence | ✅ Verified |
+| **Shutdown Button** (quick) | Quick shutdown | ✅ Verified |
+| **Shutdown Button** (hold) | Extended shutdown sequence | ✅ Verified |
+| **AUX1 Option 1** | Quick startup | ✅ Verified |
+| **Keypad 1** | Volume up | ✅ Verified |
+| **Keypad 4** | Volume down | ✅ Verified |
+| **Keypad 5** | Quick shutdown | ✅ Verified |
+| **Keypad 2** | PFA announcements (start/advance) | ✅ Verified |
+| **Smoke Up** | Cycle smoke: off → low → med → high | ✅ Verified |
+| **Smoke Down** | Cycle smoke: high → med → low → off | ✅ Verified |
+| **Front Coupler** | Fire front coupler | ✅ Verified |
+| **Rear Coupler** | Fire rear coupler | ✅ Verified |
+| **Boost** | Increase speed | ✅ Verified |
+| **Brake** | Decrease speed | ✅ Verified |
+
+### Engines Tested
+
+| Engine | Type | Status |
+|--------|------|--------|
+| **C&O Allegheny** | Steam (PS3) | ✅ Verified |
+| **SW1500** | Diesel (PS3) | ✅ Verified |
 
 ---
 
-## 
+## Coming Soon
 
-## Troubleshooting
-
-### WTIU Connection Issues
-
-1. Verify WTIU is powered on and connected to WiFi
-2. Check that Arduino UNO Q is on the same network
-
-### No Response from Train
-
-1. Verify engine is added to WTIU (use MTH app first)
-2. Check engine number mapping in the script
-3. Look at log output for error messages
-
-### Commands Not Recognized
-
-Check the log output - it shows the raw TMCC packets received. If you see "Failed to parse packet", the data_field value may need to be added to the mapping.
+- **Consist/Lashup Support** - Build and control multi-engine consists
+- **Accessory Control** - Switch and accessory command translation
+- **Custom Sound Triggers** - Map additional sounds to numeric keys
 
 ---
 
-## Technical Details
-
-### TMCC Packet Format
-
-```
-Byte 0: 0xFE (sync byte)
-Byte 1: Address bits 15-8
-Byte 2: Command and data bits 7-0
-```
-
-### MTH DCS Commands
+## Service Commands
 
 | Command | Description |
 |---------|-------------|
-| `d0` | Direction forward |
-| `d1` | Direction reverse |
-| `s{0-120}` | Speed (0-120 scale) |
-| `w2` | Whistle on |
-| `w4` | Bell on |
-| `bFFFD` | Whistle off |
-| `bFFFB` | Bell off |
-| `u4` | Engine startup |
-| `u5` | Engine shutdown |
-| `abF` | Smoke on |
-| `abE` | Smoke off |
+| `sudo systemctl start lionel-mth-bridge` | Start the bridge |
+| `sudo systemctl stop lionel-mth-bridge` | Stop the bridge |
+| `sudo systemctl restart lionel-mth-bridge` | Restart after config changes |
+| `sudo journalctl -u lionel-mth-bridge -f` | View live logs |
 
 ---
 
+## Troubleshooting
+
+**WTIU not connecting:**
+- Verify WTIU is powered and on WiFi
+- Check Arduino is on the same network subnet
+
+**No response from train:**
+- Verify engine is added to WTIU (use MTH app first)
+- Check `engine_mappings` in config file
+- View logs for error messages
+
+**Commands not recognized:**
+- Check log output for raw TMCC packets
+- Verify remote is paired with Base 3
+
+---
+
+## Credits
+
+- **Mark DiVecchio** - MTH WTIU protocol research ([silogic.com](http://www.silogic.com/trains/RTC_Running.html))
+- **Lionel LLC** - TMCC protocol documentation
+
+---
 
 ## License
 
-GNU General Public License v3.0
-
-Copyright (c) 2026 Allen Nemetz
-
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-
----
-
-## Contributing
-
-This is a beta release for user testing. Please report issues on GitHub with:
-
-1. Log output showing the problem
-2. Your hardware configuration
-3. Steps to reproduce
-
-Pull requests welcome!
+GNU General Public License v3.0 - Copyright (c) 2026 Allen Nemetz
