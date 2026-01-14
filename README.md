@@ -67,8 +67,7 @@ Remote → Base 3 → SER2 → FTDI → Arduino UNO Q → WiFi → WTIU → Trac
 3. App Lab will automatically create the folder structure:
    ```
    /home/arduino/ArduinoApps/lcs-to-mth-bridge/
-   ├── python/    ← Python scripts go here
-   └── sketch/    ← Arduino sketch goes here
+   └── python/    ← Python scripts go here
    ```
 
 4. Upload these files to the `python/` folder:
