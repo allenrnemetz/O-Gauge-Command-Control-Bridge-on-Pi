@@ -3,7 +3,6 @@
 **Control MTH DCS trains using your Lionel Cab-1L, Cab-2, or Cab-3 remote**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Beta Release](https://img.shields.io/badge/Status-Beta-orange.svg)]()
 
 ---
 
@@ -11,9 +10,9 @@
 
 This project would not be possible without the foundational work of:
 
-- **[Mark DiVecchio](http://www.silogic.com/trains/RTC_Running.html)** - Reverse-engineered the MTH WTIU protocol and created the original Real Train Control software. His documentation of DCS commands, lashup creation, and WTIU communication is the foundation this bridge is built on.
+- **[Mark DiVecchio](http://www.silogic.com/trains/RTC_Running.html)** - Reverse-engineered the MTH DCS protocol and created RTC (Remote Train Control). His documentation of DCS commands, lashup creation, and WTIU communication is the foundation this bridge is built on.
 
-- **[Dave Swindell](https://github.com/cdswindell/PyLegacy)** - Created PyLegacy/PyTrain, the definitive Python library for Lionel Legacy/TMCC control. His protocol analysis and TRAIN_ADDRESS command documentation enabled automatic consist detection.
+- **[Dave Swindell](https://github.com/cdswindell/PyLegacy)** - Created PyLegacy/PyTrain, the definitive Python library for Lionel Legacy/TMCC control. His protocol analysis and source code were invaluable references for this project.
 
 ---
 
@@ -261,6 +260,7 @@ When you clear a lashup on the Lionel side, the bridge automatically breaks up t
 
 ## Coming Soon
 
+- **DCS Remote Control of Lionel Equipment** - Control Lionel trains, accessories, and switches via DCS commands (TR/ACC/SW)
 - **Additional Device Control** - Control other devices through the MCU with additional apps (room lighting scenes, etc.)
 
 ---
