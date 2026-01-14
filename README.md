@@ -230,7 +230,7 @@ Build a lashup on your Lionel remote as usual. The bridge automatically detects 
 1. **Build your lashup** on the Lionel remote (Cab-2/Cab-3)
 2. **Bridge detects** the TRAIN_ADDRESS commands from Base 3
 3. **MTH lashup created** automatically on the WTIU
-4. **All commands sync** - speed, direction, horn/bell go to all engines
+4. **Commands sync** - speed and direction go to all engines, horn/bell to lead only
 
 ### Mixed Lionel/MTH Consists
 
