@@ -28,7 +28,6 @@ This bridge translates Lionel TMCC and Legacy commands to MTH DCS commands, lett
 - **ProtoWhistle/Quilling Horn** - Legacy whistle slider controls MTH whistle pitch
 - **Extended Startup/Shutdown** - Hold power button for full startup/shutdown sequences
 - **PFA Announcements** - Passenger/Freight announcements via CAB3
-- **Auto Engine Discovery** - Automatically discovers MTH engines on WTIU
 
 ---
 
