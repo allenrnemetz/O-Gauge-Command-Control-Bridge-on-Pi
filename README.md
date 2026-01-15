@@ -70,12 +70,14 @@ Remote → Base 3 → SER2 → FTDI → Arduino UNO Q → WiFi → WTIU → Trac
    └── python/    ← Python scripts go here
    ```
 
-4. Upload these files to the `python/` folder:
+4. Create the following files in the `python/` folder:
    - `main.py` (entry point for App Lab - replace the default one)
    - `lionel_mth_bridge.py` (main bridge script)
    - `bridge_config.json` (configuration file)
    - `install.sh` (installer script)
    - `lionel-mth-bridge.service` (systemd service file)
+
+   > **Note:** Arduino App Lab does not currently support importing files directly. You must create each file in App Lab with the same name as the source file, then copy and paste the contents from the source into the App Lab editor.
 
 5. In App Lab, click **Run** to flash the files to the Arduino Uno Q
 
@@ -84,10 +86,12 @@ Remote → Base 3 → SER2 → FTDI → Arduino UNO Q → WiFi → WTIU → Trac
 In App Lab, click the **Connect to the board's shell** button to open the board's terminal, then run:
 
 ```bash
-cd /home/arduino/ArduinoApps/YourAppFolderCreatedInAppLab/python
+cd /home/arduino/ArduinoApps/<your-app-folder-name>/python
 chmod +x install.sh
 ./install.sh
 ```
+
+> **Note:** Replace `<your-app-folder-name>` with the name of the project folder you created in App Lab (e.g., `lcs-to-mth-bridge`).
 
 The installer will:
 - Install Python dependencies
