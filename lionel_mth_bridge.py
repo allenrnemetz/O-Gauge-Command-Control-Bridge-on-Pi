@@ -869,8 +869,9 @@ class LashupManager:
             return False
         
         # Build MTH engine list with direction flags (only MTH engines included)
-        engine_list = self._build_mth_engine_list(components)
+        engine_list, dcs_ids_with_direction = self._build_mth_engine_list(components)
         self.engine_list_strings[tr_id] = engine_list  # Store for regular commands
+        self.mth_engines_in_lashup[tr_id] = dcs_ids_with_direction  # Store with direction flags for persistence
         
         if not engine_list:
             logger.warning(f"⚠️ No MTH engines to include in lashup for TR{tr_id}")
@@ -889,7 +890,7 @@ class LashupManager:
         
         return True
     
-    def _build_mth_engine_list(self, components: list) -> str:
+    def _build_mth_engine_list(self, components: list) -> tuple:
         """Build MTH engine list string from consist components
         
         From Mark's LashUp_Selection.cpp (DCS V6 format):
@@ -906,9 +907,13 @@ class LashupManager:
         
         U command uses LashUpEngineList + 1 (skips comma)
         Other lashup commands prepend "|" and use full list with comma
+        
+        Returns:
+            tuple: (engine_list_string, dcs_ids_with_direction_flags)
         """
         # Start with comma (0x2C) - will be skipped for U command
         engine_list = chr(0x2C)
+        dcs_ids_with_direction = []  # Store IDs with direction flags for persistence
         
         for comp in components:
             mth_ids = self.get_mth_engine_ids([comp.tmcc_id])
@@ -921,6 +926,7 @@ class LashupManager:
                     dcs_id |= 0x80  # Set high bit for reverse
                 # sprintf("%02X", iEng) - 2 ASCII hex characters
                 engine_list += f"{dcs_id:02X}"
+                dcs_ids_with_direction.append(dcs_id)  # Store with direction flag
                 logger.info(f"🔗 Engine {comp.tmcc_id} -> DCS {dcs_id & 0x7F} {'REV' if comp.is_reversed else 'FWD'} (0x{dcs_id:02X})")
         
         # Add 0xFF terminator (required per Mark's code)
@@ -928,7 +934,7 @@ class LashupManager:
         
         logger.info(f"🔗 Built engine list: {repr(engine_list)} = {' '.join(f'{ord(c):02X}' for c in engine_list)}")
         
-        return engine_list
+        return engine_list, dcs_ids_with_direction
     
     def clear_lashup(self, tr_id: int) -> list:
         """Clear a lashup and free the MTH ID
