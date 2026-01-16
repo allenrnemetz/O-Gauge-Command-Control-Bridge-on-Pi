@@ -697,10 +697,13 @@ class ConsistComponent:
 class LashupManager:
     """Manages Lionel TR to MTH lashup ID mapping with persistent storage"""
     
-    LASHUP_FILE = "lashup_mappings.json"
-    
     def __init__(self, bridge):
         self.bridge = bridge
+        # Use absolute path in config directory for persistence
+        config_dir = os.path.expanduser("~/.lionel-mth-bridge")
+        os.makedirs(config_dir, exist_ok=True)
+        self.lashup_file = os.path.join(config_dir, "lashup_mappings.json")
+        
         self.tr_to_mth = {}           # {lionel_tr_id: mth_lashup_id}
         self.mth_to_tr = {}           # {mth_lashup_id: lionel_tr_id}
         self.lashup_engines = {}      # {lionel_tr_id: [engine_ids]}
@@ -709,17 +712,36 @@ class LashupManager:
         self.lashup_created_on_wtiu = {}  # {lionel_tr_id: bool} - True if U command succeeded
         self.available_mth_ids = list(range(MTH_LASHUP_MIN, MTH_LASHUP_MAX + 1))
         self._load_mappings()
+        
+        # After restart, WTIU may have lost lashup state - mark all as needing recreation
+        for tr_id in self.tr_to_mth:
+            self.lashup_created_on_wtiu[tr_id] = False
+        if self.tr_to_mth:
+            logger.info(f"🔗 Loaded {len(self.tr_to_mth)} lashups - will recreate on WTIU when engines start")
     
     def _load_mappings(self):
         """Load persistent lashup mappings from file"""
         try:
-            if os.path.exists(self.LASHUP_FILE):
-                with open(self.LASHUP_FILE, 'r') as f:
+            if os.path.exists(self.lashup_file):
+                with open(self.lashup_file, 'r') as f:
                     data = json.load(f)
                     self.tr_to_mth = {int(k): v for k, v in data.get('tr_to_mth', {}).items()}
                     self.mth_to_tr = {int(k): v for k, v in data.get('mth_to_tr', {}).items()}
                     self.lashup_engines = {int(k): v for k, v in data.get('lashup_engines', {}).items()}
                     self.mth_engines_in_lashup = {int(k): v for k, v in data.get('mth_engines_in_lashup', {}).items()}
+                    self.engine_list_strings = {int(k): v for k, v in data.get('engine_list_strings', {}).items()}
+                    
+                    # Rebuild engine_list_strings from mth_engines_in_lashup if missing (legacy data)
+                    for tr_id, mth_engines in self.mth_engines_in_lashup.items():
+                        if tr_id not in self.engine_list_strings and mth_engines:
+                            # Rebuild: comma + hex bytes for each engine + 0xFF terminator
+                            engine_list = chr(0x2C)  # comma prefix
+                            for dcs_id in mth_engines:
+                                engine_list += f"{dcs_id:02X}"
+                            engine_list += chr(0xFF)  # terminator
+                            self.engine_list_strings[tr_id] = engine_list
+                            logger.info(f"🔗 Rebuilt engine list for TR{tr_id} from saved engines: {mth_engines}")
+                    
                     # Update available IDs
                     used_ids = set(self.tr_to_mth.values())
                     self.available_mth_ids = [i for i in range(MTH_LASHUP_MIN, MTH_LASHUP_MAX + 1) if i not in used_ids]
@@ -734,9 +756,10 @@ class LashupManager:
                 'tr_to_mth': self.tr_to_mth,
                 'mth_to_tr': self.mth_to_tr,
                 'lashup_engines': self.lashup_engines,
-                'mth_engines_in_lashup': self.mth_engines_in_lashup
+                'mth_engines_in_lashup': self.mth_engines_in_lashup,
+                'engine_list_strings': self.engine_list_strings
             }
-            with open(self.LASHUP_FILE, 'w') as f:
+            with open(self.lashup_file, 'w') as f:
                 json.dump(data, f, indent=2)
             logger.info(f"💾 Saved {len(self.tr_to_mth)} lashup mappings to disk")
         except Exception as e:
