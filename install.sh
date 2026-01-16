@@ -56,6 +56,16 @@ if [ "$OS" = "linux" ]; then
     print_status "Detected distribution: $DISTRO"
 fi
 
+# Prompt for username
+echo ""
+read -p "Enter the Raspberry Pi username to run the service as [$USER]: " PI_USER
+PI_USER=${PI_USER:-$USER}
+print_status "Service will run as user: $PI_USER"
+
+# Get the home directory for the specified user
+PI_HOME=$(eval echo ~$PI_USER)
+print_status "Home directory: $PI_HOME"
+
 # Create virtual environment first (required for PEP 668 compliant systems)
 print_status "Creating Python virtual environment..."
 if [ ! -d "venv" ]; then
@@ -86,19 +96,21 @@ fi
 print_status "Creating systemd service..."
 SERVICE_FILE="/etc/systemd/system/lionel-mth-bridge.service"
 
-# Create service file content
+# Create service file content using the specified username
+INSTALL_DIR=$(pwd)
 SERVICE_CONTENT="[Unit]
 Description=Lionel MTH Bridge Service
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=$USER
-WorkingDirectory=$(pwd)
-ExecStart=$(pwd)/venv/bin/python $(pwd)/lionel_mth_bridge.py
+User=$PI_USER
+WorkingDirectory=$INSTALL_DIR
+ExecStartPre=/bin/sleep 10
+ExecStart=$INSTALL_DIR/venv/bin/python $INSTALL_DIR/lionel_mth_bridge.py
 Restart=always
-RestartSec=10
-Environment=PYTHONPATH=$(pwd)
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target"
