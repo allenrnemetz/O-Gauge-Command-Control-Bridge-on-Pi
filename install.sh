@@ -177,9 +177,18 @@ else
     exit 1
 fi
 
+# Start the service
+print_status "Starting the bridge service..."
+sudo systemctl start lionel-mth-bridge.service
+
 # Print next steps
 echo ""
 echo "🎉 Installation Complete!"
 echo "========================"
 echo ""
-echo "Power Cycle the Arduino Uno Q"
+echo "The bridge service is now running and will start automatically on boot."
+echo ""
+echo "Useful commands:"
+echo "  sudo systemctl status lionel-mth-bridge   # Check status"
+echo "  sudo journalctl -u lionel-mth-bridge -f   # View logs"
+echo "  sudo systemctl restart lionel-mth-bridge  # Restart service"

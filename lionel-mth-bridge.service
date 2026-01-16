@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=arduino
-WorkingDirectory=/home/arduino/ArduinoApps/lcs-to-mth-bridge/python
+User=arnemetz
+WorkingDirectory=/home/arnemetz/lionel-mth-bridge
 ExecStartPre=/bin/sleep 10
-ExecStart=/usr/bin/python3 /home/arduino/ArduinoApps/lcs-to-mth-bridge/python/lionel_mth_bridge.py
+ExecStart=/home/arnemetz/lionel-mth-bridge/venv/bin/python /home/arnemetz/lionel-mth-bridge/lionel_mth_bridge.py
 Restart=always
 RestartSec=5
 

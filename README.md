@@ -38,74 +38,72 @@ This bridge translates Lionel TMCC and Legacy commands to MTH DCS commands, lett
 | **Lionel Base 3** (6-82972) | Receives commands from remote |
 | **Lionel Remote** (Cab-1L, Cab-2, or Cab-3) | Your controller |
 | **Lionel LCS SER2** (6-81326) | Serial output from Base 3 |
-| **FTDI USB-Serial Adapter** | Connects SER2 to Arduino |
+| **FTDI USB-Serial Adapter** | Connects SER2 to Raspberry Pi |
 | **MTH WTIU** (50-1039) | WiFi interface to DCS track |
-| **Arduino UNO Q** (ABX00162) | Runs the bridge software |
-| **USB Hub with Power Delivery** | Powers the Arduino |
+| **Raspberry Pi** (3B+, 4, or 5) | Runs the bridge software |
 
 **Connection:**
 ```
-Remote → Base 3 → SER2 → FTDI → Arduino UNO Q → WiFi → WTIU → Track
+Remote → Base 3 → SER2 → FTDI → Raspberry Pi → WiFi → WTIU → Track
 ```
 
 ---
 
 ## Installation
 
-### Step 1: Arduino UNO Q Setup
+### Step 1: Raspberry Pi Setup
 
-1. Download **Arduino App Lab** from arduino.cc
-2. Connect Arduino via USB-C and open App Lab
-3. Go to **Settings → Network** and connect to your WiFi
-
-> **Important:** Arduino and WTIU must be on the same network subnet
-
-### Step 2: Create Project in Arduino App Lab
-
-1. Open **Arduino App Lab** and connect to your Arduino UNO Q
-2. Click **New Project** and name it `lcs-to-mth-bridge`
-3. App Lab will automatically create the folder structure:
+1. Install **Raspberry Pi OS** (Lite or Desktop) on your Pi
+2. Connect to your WiFi network
+3. Enable SSH if not already enabled:
+   ```bash
+   sudo raspi-config
+   # Navigate to Interface Options → SSH → Enable
    ```
-   /home/arduino/ArduinoApps/lcs-to-mth-bridge/
-   └── python/    ← Python scripts go here
+4. Note your Pi's IP address:
+   ```bash
+   hostname -I
    ```
 
-4. Create the following files in the `python/` folder:
-   - `main.py` (entry point for App Lab - replace the default one)
-   - `lionel_mth_bridge.py` (main bridge script)
-   - `bridge_config.json` (configuration file)
-   - `install.sh` (installer script)
-   - `lionel-mth-bridge.service` (systemd service file)
+> **Important:** Raspberry Pi and WTIU must be on the same network subnet
 
-   > **Note:** Arduino App Lab does not currently support importing files directly. You must create each file in App Lab with the same name as the source file, then copy and paste the contents from the source into the App Lab editor.
+### Step 2: Download the Bridge Software
 
-5. In App Lab, click **Run** to flash the files to the Arduino Uno Q
+SSH into your Raspberry Pi and clone the repository:
+
+```bash
+cd ~
+git clone https://github.com/allenrnemetz/O-Gauge-Command-Control-Bridge.git lionel-mth-bridge
+cd lionel-mth-bridge
+```
+
+Or copy the files manually via SCP:
+```bash
+# From your computer:
+scp lionel_mth_bridge.py bridge_config.json install.sh lionel-mth-bridge.service main.py <username>@<pi-ip>:~/lionel-mth-bridge/
+```
 
 ### Step 3: Run the Installer
 
-In App Lab, click the **Connect to the board's shell** button to open the board's terminal, then run:
+SSH into your Raspberry Pi and run:
 
 ```bash
-cd /home/arduino/ArduinoApps/<your-app-folder-name>/python
+cd ~/lionel-mth-bridge
 chmod +x install.sh
 ./install.sh
 ```
 
-> **Note:** Replace `<your-app-folder-name>` with the name of the project folder you created in App Lab (e.g., `lcs-to-mth-bridge`).
-
 The installer will:
-- Install Python dependencies
+- Create a Python virtual environment
+- Install Python dependencies (pyserial, zeroconf)
 - Create the configuration file
-- Set up the systemd service
-- Start the bridge
+- Set up and enable the systemd service
+- Start the bridge automatically
 
 ### Step 4: Connect Hardware
 
-1. Disconnect the Arduino UNO Q from your computer
-2. Connect the USB hub to the Arduino UNO Q via USB-C
-3. Connect the power adapter to the USB hub's PD (Power Delivery) port
-4. Connect the FTDI cable to the USB hub
-5. Connect the FTDI cable's DB9 end to the SER2
+1. Connect the FTDI USB-Serial adapter to the Raspberry Pi's USB port
+2. Connect the FTDI cable's DB9 end to the LCS SER2
 
 ### Step 5: Add Engines to MTH WTIU
 
@@ -122,7 +120,9 @@ The installer will:
 
 The bridge auto-discovers MTH engines and maps them automatically. Most users won't need to change anything.
 
-**Default config (`bridge_config.json`):**
+The configuration file is located at `~/.lionel-mth-bridge/bridge_config.json`.
+
+**Default config:**
 ```json
 {
   "lionel_port": "/dev/ttyUSB0",
@@ -276,7 +276,7 @@ When you clear a lashup on the Lionel side, the bridge automatically breaks up t
 
 **WTIU not connecting:**
 - Verify WTIU is powered and on WiFi
-- Check Arduino is on the same network subnet
+- Check Raspberry Pi is on the same network subnet
 
 **No response from train:**
 - Verify engine is added to WTIU (use MTH app first)
