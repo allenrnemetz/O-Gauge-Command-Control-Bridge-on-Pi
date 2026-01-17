@@ -3011,6 +3011,15 @@ class LionelMTHBridge:
     def send_wtiu_command(self, command, engine=None):
         """Send command to WTIU in exact ESP8266 format"""
         try:
+            # Global rate limiting to prevent WTIU overload
+            current_time = time.time()
+            if not hasattr(self, '_last_wtiu_command_time'):
+                self._last_wtiu_command_time = 0
+            time_since_last = current_time - self._last_wtiu_command_time
+            if time_since_last < 0.1:  # Minimum 100ms between commands
+                time.sleep(0.1 - time_since_last)
+            self._last_wtiu_command_time = time.time()
+            
             # Select engine if specified and different from last selected
             if engine is None:
                 engine = self.current_lionel_engine
