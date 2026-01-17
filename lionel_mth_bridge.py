@@ -3980,6 +3980,8 @@ class LionelMTHBridge:
                 return self.convert_volume(cmd_value)
             elif cmd_type == 'function' and cmd_value == 'pfa':
                 # PFA - Passenger/Freight Announcements (Keypad 2)
+                # First press: u1 to start, subsequent: m24 to advance
+                # Auto-reset after 30 seconds of no presses
                 engine = self.current_lionel_engine
                 current_time = time.time()
                 
@@ -3991,17 +3993,13 @@ class LionelMTHBridge:
                     return None  # Ignore repeated packets
                 self._pfa_debounce_time[engine] = current_time
                 
+                # Check if PFA sequence should be reset (45 sec timeout)
                 last_pfa_time = self.pfa_direction.get(engine, 0)
-                pfa_active = self.pfa_state.get(engine, False)
-                
-                # If PFA was active but 60+ seconds since last press, end it first
-                if pfa_active and (current_time - last_pfa_time > 60):
-                    logger.info(f"🔊 PFA Timeout: Engine {engine} → u0")
-                    self.send_wtiu_command('u0')
-                    self.pfa_state[engine] = False
-                    pfa_active = False
+                if current_time - last_pfa_time > 45:
+                    self.pfa_state[engine] = False  # Reset PFA state
                 
                 self.pfa_direction[engine] = current_time
+                pfa_active = self.pfa_state.get(engine, False)
                 
                 if not pfa_active:
                     self.pfa_state[engine] = True
