@@ -1550,23 +1550,23 @@ class LionelMTHBridge:
                 else:
                     logger.info(f"🔧 DEBUG: Quillable whistle OFF (toggled)")
                     return {'type': 'function', 'value': 'whistle_off'}
-            elif data_field == 0x12:  # Aux2 Option 5 (10010) - Button 9 = Smoke ON
-                logger.info(f"🔧 DEBUG: Button 9 - Smoke ON detected")
-                return {'type': 'function', 'value': 'smoke_on'}
-            elif data_field == 0x13:  # Aux2 Option 6 (10011) - Button 8 = Smoke OFF
-                logger.info(f"🔧 DEBUG: Button 8 - Smoke OFF detected")
-                return {'type': 'function', 'value': 'smoke_off'}
+            elif data_field == 0x12:  # Keypad 2 - PFA (Passenger/Freight Announcements)
+                logger.info(f"🔧 DEBUG: Keypad 2 - PFA detected")
+                return {'type': 'function', 'value': 'pfa'}
+            elif data_field == 0x13:  # Keypad 3
+                logger.info(f"🔧 DEBUG: Keypad 3 detected")
+                return {'type': 'function', 'value': 'idle_sound'}
             elif data_field == 0x14:  # (10100) - Button 4 = Volume DOWN
                 logger.info(f"🔧 DEBUG: Button 4 - Volume DOWN detected")
                 return {'type': 'function', 'value': 'volume_down'}
             elif data_field == 0x15:  # Shutdown (10101)
                 return {'type': 'engine', 'value': 'shutdown'}
-            elif data_field == 0x18:  # (11000) - Smoke Off
-                logger.info(f"🔧 DEBUG: Smoke OFF detected")
-                return {'type': 'smoke', 'value': 'off'}
-            elif data_field == 0x19:  # (11001) - Smoke On
-                logger.info(f"🔧 DEBUG: Smoke ON detected")
-                return {'type': 'smoke', 'value': 'on'}
+            elif data_field == 0x18:  # Keypad 8 - Smoke Down Cycle (max->med->min->off)
+                logger.info(f"🔧 DEBUG: Keypad 8 - Smoke Down detected")
+                return {'type': 'function', 'value': 'smoke_down'}
+            elif data_field == 0x19:  # Keypad 9 - Smoke Up Cycle (off->min->med->max)
+                logger.info(f"🔧 DEBUG: Keypad 9 - Smoke Up detected")
+                return {'type': 'function', 'value': 'smoke_up'}
             elif data_field == 0x11:  # (10001) - Button 1 = Volume UP
                 logger.info(f"🔧 DEBUG: Button 1 - Volume UP detected")
                 return {'type': 'function', 'value': 'volume_up'}
@@ -3978,6 +3978,62 @@ class LionelMTHBridge:
             elif cmd_type == 'function' and cmd_value in ['volume_up', 'volume_down']:
                 # Handle volume commands
                 return self.convert_volume(cmd_value)
+            elif cmd_type == 'function' and cmd_value == 'pfa':
+                # PFA - Passenger/Freight Announcements (Keypad 2)
+                engine = self.current_lionel_engine
+                current_time = time.time()
+                
+                # Debounce PFA commands (CAB1L sends multiple packets per press)
+                if not hasattr(self, '_pfa_debounce_time'):
+                    self._pfa_debounce_time = {}
+                last_debounce = self._pfa_debounce_time.get(engine, 0)
+                if current_time - last_debounce < 1.0:  # 1 second debounce
+                    return None  # Ignore repeated packets
+                self._pfa_debounce_time[engine] = current_time
+                
+                last_pfa_time = self.pfa_direction.get(engine, 0)
+                pfa_active = self.pfa_state.get(engine, False)
+                
+                # If PFA was active but 60+ seconds since last press, end it first
+                if pfa_active and (current_time - last_pfa_time > 60):
+                    logger.info(f"🔊 PFA Timeout: Engine {engine} → u0")
+                    self.send_wtiu_command('u0')
+                    self.pfa_state[engine] = False
+                    pfa_active = False
+                
+                self.pfa_direction[engine] = current_time
+                
+                if not pfa_active:
+                    self.pfa_state[engine] = True
+                    logger.info(f"🔊 PFA Started: Engine {engine} → u1")
+                    return 'u1'
+                else:
+                    logger.info(f"🔊 PFA Advance: Engine {engine} → m24")
+                    return 'm24'
+            elif cmd_type == 'function' and cmd_value == 'idle_sound':
+                # Idle sound (Keypad 3)
+                logger.info(f"🔊 Idle sound: i3")
+                return 'i3'
+            elif cmd_type == 'function' and cmd_value == 'smoke_up':
+                # Smoke Up Cycle (Keypad 9): off->min->med->max
+                engine = self.current_lionel_engine
+                current_state = self.smoke_states.get(engine, 0)
+                new_state = min(3, current_state + 1)
+                self.smoke_states[engine] = new_state
+                smoke_cmds = {1: 'ab12', 2: 'ab11', 3: 'ab10'}  # min, med, max
+                if new_state == 1:
+                    self.send_wtiu_command('abF')  # Turn on first
+                logger.info(f"💨 Smoke UP: Engine {engine} level {new_state}")
+                return smoke_cmds.get(new_state, 'abF')
+            elif cmd_type == 'function' and cmd_value == 'smoke_down':
+                # Smoke Down Cycle (Keypad 8): max->med->min->off
+                engine = self.current_lionel_engine
+                current_state = self.smoke_states.get(engine, 0)
+                new_state = max(0, current_state - 1)
+                self.smoke_states[engine] = new_state
+                smoke_cmds = {0: 'abE', 1: 'ab12', 2: 'ab11'}  # off, min, med
+                logger.info(f"💨 Smoke DOWN: Engine {engine} level {new_state}")
+                return smoke_cmds.get(new_state, 'abE')
             elif cmd_type == 'function' and cmd_value == 'aux2_option1':
                 # Cab 1L AUX2 button = Headlight Toggle - track state with debounce
                 engine = self.current_lionel_engine
@@ -4241,11 +4297,11 @@ class LionelMTHBridge:
                                         if self.send_to_mth_with_legacy(command):
                                             logger.info("✅ Legacy → MTH")
                                     else:
-                                        # TMCC1 - use original path
+                                        # TMCC1 - convert once and send directly
                                         mth_cmd = self.convert_to_mth_protocol(command)
                                         if mth_cmd:
                                             logger.info(f"📤 MTH: {mth_cmd}")
-                                        self.send_to_mth(command)
+                                            self.send_wtiu_command(mth_cmd)
                         else:
                             # Log every 10 seconds if no data received
                             if time.time() - last_activity > 10:
