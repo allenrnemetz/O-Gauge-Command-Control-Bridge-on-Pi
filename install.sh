@@ -196,6 +196,12 @@ sudo systemctl start lionel-mth-bridge.service
 # Get the Pi's IP address for display
 PI_IP=$(hostname -I | awk '{print $1}')
 
+# Update README.md with actual Pi IP address
+if [ -f "README.md" ]; then
+    sed -i "s/PI_IP_PLACEHOLDER/$PI_IP/g" README.md
+    print_status "Updated README.md with Pi IP address: $PI_IP"
+fi
+
 # Print next steps
 echo ""
 echo "🎉 Installation Complete!"

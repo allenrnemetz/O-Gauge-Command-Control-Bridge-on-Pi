@@ -271,10 +271,10 @@ The bridge includes a TCP serial proxy that allows other applications like **PyT
 When installing PyTrain, configure it to connect to the TCP proxy instead of the serial port directly:
 
 ```bash
-pytrain -ser2 192.168.0.6:5111
+pytrain -ser2 PI_IP_PLACEHOLDER:5111
 ```
 
-Replace `192.168.0.6` with your Raspberry Pi's IP address.
+(The IP address above is automatically updated by the install script.)
 
 ### Configuration
 
