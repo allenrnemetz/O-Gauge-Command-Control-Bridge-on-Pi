@@ -4180,6 +4180,16 @@ class LionelMTHBridge:
             elif cmd_type == 'function' and cmd_value == 'smoke_up':
                 # Smoke Up Cycle (Keypad 9): off->min->med->max
                 engine = self.current_lionel_engine
+                current_time = time.time()
+                
+                # Debounce smoke commands (1 second)
+                if not hasattr(self, '_smoke_debounce_time'):
+                    self._smoke_debounce_time = {}
+                last_debounce = self._smoke_debounce_time.get(engine, 0)
+                if current_time - last_debounce < 1.0:
+                    return None  # Ignore repeated packets
+                self._smoke_debounce_time[engine] = current_time
+                
                 current_state = self.smoke_states.get(engine, 0)
                 new_state = min(3, current_state + 1)
                 self.smoke_states[engine] = new_state
@@ -4191,6 +4201,16 @@ class LionelMTHBridge:
             elif cmd_type == 'function' and cmd_value == 'smoke_down':
                 # Smoke Down Cycle (Keypad 8): max->med->min->off
                 engine = self.current_lionel_engine
+                current_time = time.time()
+                
+                # Debounce smoke commands (1 second)
+                if not hasattr(self, '_smoke_debounce_time'):
+                    self._smoke_debounce_time = {}
+                last_debounce = self._smoke_debounce_time.get(engine, 0)
+                if current_time - last_debounce < 1.0:
+                    return None  # Ignore repeated packets
+                self._smoke_debounce_time[engine] = current_time
+                
                 current_state = self.smoke_states.get(engine, 0)
                 new_state = max(0, current_state - 1)
                 self.smoke_states[engine] = new_state
