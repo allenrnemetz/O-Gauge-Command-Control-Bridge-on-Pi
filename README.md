@@ -293,16 +293,10 @@ Set `enabled` to `false` to disable the proxy if not needed.
 
 ### Multiple Clients
 
-- Multiple clients can connect simultaneously for **read-only** monitoring
-- Write commands from clients are serialized through the bridge
+- Multiple clients can connect simultaneously
+- All clients receive SER2 data in real-time
+- All clients can send commands to the SER2 (serialized through the bridge)
 - Your CAB-1L/2/3 remotes continue to work normally via Base 3
-
----
-
-## Coming Soon
-
-- **DCS Remote Control of Lionel Equipment** - Control Lionel trains, accessories, and switches via DCS commands (TR/ACC/SW)
-- **Additional Device Control** - Control other devices through the MCU with additional apps (room lighting scenes, etc.)
 
 ---
 
