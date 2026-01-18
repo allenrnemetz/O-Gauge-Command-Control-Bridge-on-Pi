@@ -92,6 +92,10 @@ class Config:
             "queue_settings": {
                 "max_queue_size": 100,
                 "processing_interval": 0.01
+            },
+            "tcp_proxy": {
+                "enabled": True,
+                "port": 5111
             }
         }
     
@@ -1207,6 +1211,152 @@ class PdiClient:
             return None
 
 
+class SerialTcpProxy:
+    """TCP proxy for sharing SER2 serial port with external applications like PyTrain.
+    
+    Listens on a TCP port and:
+    - Broadcasts all incoming SER2 data to connected clients
+    - Accepts commands from clients and forwards them to the SER2
+    - Allows multiple read-only clients, serializes writes
+    """
+    
+    def __init__(self, bridge, port=5111):
+        self.bridge = bridge
+        self.port = port
+        self.server_socket = None
+        self.clients = []  # List of connected client sockets
+        self.clients_lock = Lock()
+        self.running = False
+        self.server_thread = None
+        
+    def start(self):
+        """Start the TCP proxy server"""
+        if self.running:
+            return
+            
+        self.running = True
+        self.server_thread = threading.Thread(target=self._server_loop, daemon=True)
+        self.server_thread.start()
+        logger.info(f"🌐 Serial TCP proxy started on port {self.port}")
+        
+    def stop(self):
+        """Stop the TCP proxy server"""
+        self.running = False
+        
+        # Close all client connections
+        with self.clients_lock:
+            for client in self.clients:
+                try:
+                    client.close()
+                except:
+                    pass
+            self.clients.clear()
+        
+        # Close server socket
+        if self.server_socket:
+            try:
+                self.server_socket.close()
+            except:
+                pass
+            self.server_socket = None
+            
+        logger.info("🌐 Serial TCP proxy stopped")
+        
+    def _server_loop(self):
+        """Main server loop - accepts client connections"""
+        try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_socket.bind(('0.0.0.0', self.port))
+            self.server_socket.listen(5)
+            self.server_socket.settimeout(1.0)  # Allow periodic check of self.running
+            
+            while self.running:
+                try:
+                    client_socket, addr = self.server_socket.accept()
+                    logger.info(f"🌐 TCP proxy client connected from {addr}")
+                    
+                    with self.clients_lock:
+                        self.clients.append(client_socket)
+                    
+                    # Start a thread to handle this client's incoming data
+                    client_thread = threading.Thread(
+                        target=self._handle_client, 
+                        args=(client_socket, addr),
+                        daemon=True
+                    )
+                    client_thread.start()
+                    
+                except socket.timeout:
+                    continue  # Check self.running and loop
+                except Exception as e:
+                    if self.running:
+                        logger.error(f"🌐 TCP proxy accept error: {e}")
+                        
+        except Exception as e:
+            logger.error(f"🌐 TCP proxy server error: {e}")
+        finally:
+            self.running = False
+            
+    def _handle_client(self, client_socket, addr):
+        """Handle incoming data from a client - forward to SER2"""
+        try:
+            client_socket.settimeout(1.0)
+            
+            while self.running:
+                try:
+                    data = client_socket.recv(1024)
+                    if not data:
+                        break  # Client disconnected
+                    
+                    # Forward data to SER2
+                    if self.bridge.lionel_serial and self.bridge.lionel_serial.is_open:
+                        with self.bridge.lionel_lock:
+                            self.bridge.lionel_serial.write(data)
+                            logger.info(f"🌐 TCP->SER2: {len(data)} bytes from {addr}")
+                            
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    logger.error(f"🌐 TCP client recv error: {e}")
+                    break
+                    
+        except Exception as e:
+            logger.error(f"🌐 TCP client handler error: {e}")
+        finally:
+            # Remove client from list
+            with self.clients_lock:
+                if client_socket in self.clients:
+                    self.clients.remove(client_socket)
+            try:
+                client_socket.close()
+            except:
+                pass
+            logger.info(f"🌐 TCP proxy client disconnected: {addr}")
+            
+    def broadcast(self, data):
+        """Broadcast data to all connected clients"""
+        if not data or not self.clients:
+            return
+            
+        with self.clients_lock:
+            disconnected = []
+            for client in self.clients:
+                try:
+                    client.sendall(data)
+                except Exception as e:
+                    logger.debug(f"🌐 TCP broadcast error: {e}")
+                    disconnected.append(client)
+            
+            # Remove disconnected clients
+            for client in disconnected:
+                self.clients.remove(client)
+                try:
+                    client.close()
+                except:
+                    pass
+
+
 class LionelMTHBridge:
     def __init__(self):
         # Load configuration
@@ -1348,6 +1498,12 @@ class LionelMTHBridge:
         self.lashup_manager = LashupManager(self)
         self.pending_train_queries = set()
         self.queried_trains = set()  # TR IDs we've already queried (no need to re-query)  # Train IDs to query after lashup commands
+        
+        # TCP serial proxy for sharing SER2 with PyTrain and other apps
+        tcp_proxy_settings = self.settings.get('tcp_proxy', {})
+        tcp_proxy_port = tcp_proxy_settings.get('port', 5111)
+        tcp_proxy_enabled = tcp_proxy_settings.get('enabled', True)
+        self.serial_tcp_proxy = SerialTcpProxy(self, port=tcp_proxy_port) if tcp_proxy_enabled else None
         
     def wait_for_lionel_connection(self):
         """Wait for SER2 to be available and connect"""
@@ -4208,6 +4364,10 @@ class LionelMTHBridge:
                             last_activity = time.time()
                             logger.info(f"🔍 Received {len(data)} bytes: {data.hex()}")
                             
+                            # Broadcast to TCP proxy clients (PyTrain, etc.)
+                            if self.serial_tcp_proxy:
+                                self.serial_tcp_proxy.broadcast(data)
+                            
                             # Check for PDI packets (consist broadcasts from Base 3)
                             # PDI packets start with 0xD1 (SOP) and end with 0xDF (EOP)
                             if PDI_SOP in data:
@@ -4618,6 +4778,10 @@ class LionelMTHBridge:
         # Start periodic MTH engine discovery (every 60 seconds)
         self.start_periodic_engine_discovery()
         
+        # Start TCP serial proxy for PyTrain and other apps
+        if self.serial_tcp_proxy:
+            self.serial_tcp_proxy.start()
+        
         return True
     
     def start_periodic_engine_discovery(self):
@@ -4670,6 +4834,10 @@ class LionelMTHBridge:
         """Stop the bridge"""
         logger.info("🛑 Stopping bridge...")
         self.running = False
+        
+        # Stop TCP serial proxy
+        if self.serial_tcp_proxy:
+            self.serial_tcp_proxy.stop()
         
         # Close serial connections safely
         if self.lionel_serial and hasattr(self.lionel_serial, 'is_open') and self.lionel_serial.is_open:
