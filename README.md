@@ -255,6 +255,50 @@ When you clear a lashup on the Lionel side, the bridge automatically breaks up t
 
 ---
 
+## TCP Serial Proxy (PyTrain Integration)
+
+The bridge includes a TCP serial proxy that allows other applications like **PyTrain** to share access to the SER2 serial port.
+
+### How It Works
+
+- The bridge owns the SER2 serial port
+- A TCP server runs on port **5111** (configurable)
+- Connected clients receive all SER2 data in real-time
+- Clients can send commands which are forwarded to the SER2
+
+### Connecting PyTrain
+
+When installing PyTrain, configure it to connect to the TCP proxy instead of the serial port directly:
+
+```bash
+pytrain -ser2 192.168.0.6:5111
+```
+
+Replace `192.168.0.6` with your Raspberry Pi's IP address.
+
+### Configuration
+
+The TCP proxy is enabled by default. To configure it, edit `~/.lionel-mth-bridge/bridge_config.json`:
+
+```json
+{
+  "tcp_proxy": {
+    "enabled": true,
+    "port": 5111
+  }
+}
+```
+
+Set `enabled` to `false` to disable the proxy if not needed.
+
+### Multiple Clients
+
+- Multiple clients can connect simultaneously for **read-only** monitoring
+- Write commands from clients are serialized through the bridge
+- Your CAB-1L/2/3 remotes continue to work normally via Base 3
+
+---
+
 ## Coming Soon
 
 - **DCS Remote Control of Lionel Equipment** - Control Lionel trains, accessories, and switches via DCS commands (TR/ACC/SW)
