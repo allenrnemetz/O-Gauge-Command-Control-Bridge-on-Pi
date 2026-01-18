@@ -193,12 +193,18 @@ fi
 print_status "Starting the bridge service..."
 sudo systemctl start lionel-mth-bridge.service
 
+# Get the Pi's IP address for display
+PI_IP=$(hostname -I | awk '{print $1}')
+
 # Print next steps
 echo ""
 echo "🎉 Installation Complete!"
 echo "========================"
 echo ""
 echo "The bridge service is now running and will start automatically on boot."
+echo ""
+echo "TCP Serial Proxy is available at: $PI_IP:5111"
+echo "  - PyTrain can connect using: pytrain -ser2 $PI_IP:5111"
 echo ""
 echo "Useful commands:"
 echo "  sudo systemctl status lionel-mth-bridge   # Check status"
