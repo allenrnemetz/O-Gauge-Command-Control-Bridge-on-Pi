@@ -304,6 +304,29 @@ Set `enabled` to `false` to disable the proxy if not needed.
 
 ---
 
+## Updating the Bridge
+
+Run the updater script on the Pi to pull the latest code, refresh dependencies, and restart the service:
+
+```bash
+cd ~/lionel-mth-bridge
+./update.sh
+```
+
+If you haven't made it executable yet:
+
+```bash
+chmod +x ~/lionel-mth-bridge/update.sh
+./update.sh
+```
+
+The script will:
+- `git pull --rebase`
+- `pip install --upgrade -r requirements.txt` (inside the venv)
+- `sudo systemctl restart lionel-mth-bridge.service`
+
+---
+
 ## Troubleshooting
 
 **WTIU not connecting:**
