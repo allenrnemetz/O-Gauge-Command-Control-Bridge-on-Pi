@@ -35,6 +35,12 @@ import queue
 from queue import Queue, Empty
 import struct
 
+# Optional WLED accessory integration
+try:
+    from tmcc_wled import WLEDController
+except Exception:
+    WLEDController = None
+
 # PDI Protocol Constants (from pytrain-ogr)
 PDI_SOP = 0xD1  # Start of Packet
 PDI_EOP = 0xDF  # End of Packet
@@ -78,6 +84,20 @@ class Config:
                 "connection_check_interval": 5,
                 "debounce_delay": 0.5,
                 "whistle_timeout": 0.3
+            },
+            "wled": {
+                "enabled": False,
+                "host": "192.168.0.10",
+                "port": 80,
+                "pattern_presets": [1, 2, 3],
+                # Mapping: {"<acc_address>": {"<data_field>": "action"}}
+                "mapping": {
+                    "50": {
+                        "1": "on",     # ACC 50 keypad 1
+                        "2": "off",    # ACC 50 keypad 2
+                        "3": "cycle"   # ACC 50 keypad 3
+                    }
+                }
             },
             "mth_settings": {
                 "master_volume": 70,
@@ -1368,6 +1388,42 @@ class LionelMTHBridge:
         self.mth_host = self.settings.get('mth_host', 'auto')
         self.mth_port = self.settings.get('mth_port', 'auto')
         self.engine_mappings = self.settings.get('engine_mappings', {})
+
+        # Optional WLED controller
+        self.wled_controller = None
+        wled_cfg = self.settings.get('wled', {})
+        if WLEDController and wled_cfg.get('enabled', False):
+            try:
+                # Convert string keys from JSON to int tuples {(addr, data): action}
+                mapping_dict = {}
+                raw_mapping = wled_cfg.get('mapping', {})
+                for acc_addr_str, data_map in raw_mapping.items():
+                    try:
+                        acc_addr = int(acc_addr_str)
+                    except ValueError:
+                        continue
+                    for data_str, action in data_map.items():
+                        try:
+                            data_val = int(data_str)
+                        except ValueError:
+                            continue
+                        mapping_dict[(acc_addr, data_val)] = action
+
+                self.wled_controller = WLEDController(
+                    host=wled_cfg.get('host', '192.168.0.10'),
+                    port=wled_cfg.get('port', 80),
+                    mapping=mapping_dict,
+                    pattern_presets=wled_cfg.get('pattern_presets', []),
+                    daylight_cycle=wled_cfg.get('daylight_cycle', False),
+                    cycle_duration_sec=wled_cfg.get('cycle_duration_sec', 1800),
+                    led_count=wled_cfg.get('led_count', 100),
+                    moon_start=wled_cfg.get('moon_start', 0),
+                    moon_length=wled_cfg.get('moon_length', 5),
+                    lightning_every_n_cycles=wled_cfg.get('lightning_every_n_cycles', 3),
+                )
+                logger.info(f"🧩 WLED controller enabled for host {wled_cfg.get('host', '192.168.0.10')}")
+            except Exception as e:
+                logger.error(f"❌ Failed to init WLED controller: {e}")
         
         # MTH discovery settings
         mth_settings = self.settings.get('mth_settings', {})
@@ -1619,12 +1675,16 @@ class LionelMTHBridge:
         # Extract command type (bits 15-14) from packet[1]
         cmd_type = (packet[1] >> 6) & 0x03
         
-        # Ignore Switch (10) and Accessory/Group (11) commands - they're not for engines
-        if cmd_type == 0x02:  # Switch command
-            logger.info(f"🔀 Switch command detected - ignoring (not for MTH engines)")
-            return None
-        elif cmd_type == 0x03:  # Accessory/Group command
-            logger.info(f"🎛️ Accessory/Group command detected - ignoring (not for MTH engines)")
+        # Switch (0x02) and Accessory/Group (0x03) commands can be forwarded to WLED
+        if cmd_type == 0x02 or cmd_type == 0x03:
+            # Forward to WLED handler if configured
+            if self.wled_controller:
+                try:
+                    handled = self.wled_controller.handle_packet(packet, cmd_type)
+                    if handled:
+                        logger.info(f"🎛️ {'Switch' if cmd_type == 0x02 else 'Accessory'} command forwarded to WLED")
+                except Exception as e:
+                    logger.error(f"❌ WLED handling failed: {e}")
             return None
         
         # Extract address field (bits 13-7) from packet[1] and packet[2]
