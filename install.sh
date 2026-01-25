@@ -92,6 +92,68 @@ else
     print_warning "Configuration already exists at $CONFIG_DIR/bridge_config.json"
 fi
 
+# WLED Configuration
+echo ""
+echo "🎨 WLED LED Strip Controller Configuration"
+echo "==========================================="
+read -p "Do you have a WLED controller to configure? (y/n) [n]: " CONFIGURE_WLED
+CONFIGURE_WLED=${CONFIGURE_WLED:-n}
+
+if [[ "$CONFIGURE_WLED" =~ ^[Yy]$ ]]; then
+    read -p "Enter the IP address of your WLED controller [192.168.0.10]: " WLED_IP
+    WLED_IP=${WLED_IP:-192.168.0.10}
+    
+    read -p "Enter the ACC/Switch ID to control WLED (1-99) [50]: " WLED_ACC_ID
+    WLED_ACC_ID=${WLED_ACC_ID:-50}
+    
+    read -p "Enter the total number of LEDs on your strip(s) [100]: " WLED_LED_COUNT
+    WLED_LED_COUNT=${WLED_LED_COUNT:-100}
+    
+    print_status "Configuring WLED: IP=$WLED_IP, ACC ID=$WLED_ACC_ID, LED Count=$WLED_LED_COUNT"
+    
+    # Update the config file with WLED settings using Python for JSON manipulation
+    python3 << EOF
+import json
+
+config_path = "$CONFIG_DIR/bridge_config.json"
+with open(config_path, 'r') as f:
+    config = json.load(f)
+
+config['wled'] = {
+    "enabled": True,
+    "host": "$WLED_IP",
+    "port": 80,
+    "daylight_cycle": True,
+    "cycle_duration_sec": 900,
+    "led_count": $WLED_LED_COUNT,
+    "moon_start": 0,
+    "moon_length": 5,
+    "mapping": {
+        "$WLED_ACC_ID": {
+            "17": "full_white",
+            "18": "off",
+            "19": "daylight_start",
+            "20": "daylight_stop"
+        }
+    }
+}
+
+with open(config_path, 'w') as f:
+    json.dump(config, f, indent=4)
+
+print("✅ WLED configuration saved")
+EOF
+
+    echo ""
+    echo "WLED Control Mapping (ACC/Switch $WLED_ACC_ID):"
+    echo "  Keypad 1 = Full white (all LEDs on, max brightness)"
+    echo "  Keypad 2 = Turn off all LEDs"
+    echo "  Keypad 3 = Start daylight cycle (15-min day/night)"
+    echo "  Keypad 4 = Stop daylight cycle"
+else
+    print_status "Skipping WLED configuration"
+fi
+
 # Create systemd service file
 print_status "Creating systemd service..."
 SERVICE_FILE="/etc/systemd/system/lionel-mth-bridge.service"
