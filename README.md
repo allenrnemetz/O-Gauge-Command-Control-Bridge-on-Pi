@@ -168,6 +168,26 @@ You should see:
 
 ---
 
+## WLED LED Strip Control (Optional)
+
+The bridge can control WLED-based LED strips via your Lionel remote, including a smooth day/night lighting cycle.
+
+**Requirements:** ESP32 with WLED firmware on your network.
+
+**Setup:** During installation, answer "y" when prompted for WLED configuration and enter your controller's IP address and preferred ACC/Switch ID.
+
+**Default Controls (ACC/Switch 50):**
+| Keypad | Action |
+|--------|--------|
+| 1 | Full white (max brightness) |
+| 2 | Turn off all LEDs |
+| 3 | Start 15-min day/night cycle |
+| 4 | Stop day/night cycle |
+
+The daylight cycle smoothly transitions through morning → afternoon → sunset → night → sunrise, with a moon segment visible during night hours.
+
+---
+
 ## Verified Commands
 
 ### TMCC Mode
